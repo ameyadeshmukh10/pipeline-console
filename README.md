@@ -26,6 +26,11 @@ Reasoning: **Anthropic Claude** (`claude-opus-4-8`).
 All metrics are scoped to **Q2 2026** (quarter start `2026-04-01`, configurable) and are
 **event-dated**: a metric counts in the ISO week the stage *event* happened.
 
+> 📐 **[docs/METHODOLOGY.md](docs/METHODOLOGY.md)** — the full write-up of every report's
+> logic, the math, and the rationale behind the decisions (attribution, conversion formula,
+> trend views, forecast scenarios, flags, Working Score, statistical choices). Start there to
+> understand *why* a number is what it is.
+
 ## Setup
 
 ```bash
