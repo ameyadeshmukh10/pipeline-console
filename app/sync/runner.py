@@ -16,7 +16,7 @@ from .. import db
 from ..config import settings
 from ..constants import ROSTER_IDS, STAGE_ORDER_BY_ID
 from ..hubspot.client import HubSpotClient
-from ..hubspot.deals import fetch_deals, fetch_owners
+from ..hubspot.deals import fetch_deals, fetch_owners, fetch_users
 from ..hubspot.engagements import fetch_engagements_for_deals
 from ..metrics.windows import iso_week_key, now_utc, parse_ts
 from .events import derive_stage_history
@@ -48,6 +48,20 @@ async def _upsert_owners(conn: aiosqlite.Connection, owners: List[Dict[str, Any]
                  in_roster=excluded.in_roster, last_synced_at=excluded.last_synced_at""",
             (oid, o.get("firstName"), o.get("lastName"), o.get("email"),
              1 if o.get("archived") else 0, 1 if oid in ROSTER_IDS else 0, now),
+        )
+
+
+async def _upsert_users(conn: aiosqlite.Connection, users: List[Dict[str, Any]]) -> None:
+    """Fill name-resolution gaps for user-id creators with no owner record.
+    INSERT OR IGNORE so real owner rows (with archived flags) always win."""
+    now = now_utc().isoformat()
+    for u in users:
+        uid = str(u.get("id"))
+        await conn.execute(
+            """INSERT OR IGNORE INTO owners(owner_id, first_name, last_name, email,
+                 archived, in_roster, last_synced_at) VALUES(?,?,?,?,?,?,?)""",
+            (uid, u.get("firstName"), u.get("lastName"), u.get("email"),
+             0, 1 if uid in ROSTER_IDS else 0, now),
         )
 
 
@@ -174,6 +188,7 @@ async def run_sync() -> Dict[str, Any]:
         async with HubSpotClient(concurrency=5) as client:
             st.phase = "fetching_owners"
             await _upsert_owners(conn, await fetch_owners(client))
+            await _upsert_users(conn, await fetch_users(client))
             await conn.commit()
             st.request_count = client.request_count
 

@@ -42,15 +42,37 @@ async def fetch_deals(
 
 
 async def fetch_owners(client: HubSpotClient) -> List[Dict[str, Any]]:
+    """Active AND archived owners. Archived ex-reps still appear as the CREATOR
+    (hs_created_by_user_id) of older deals, so we need their names to resolve in
+    the Pre-Pipeline creator views (the default endpoint omits archived owners)."""
     owners: List[Dict[str, Any]] = []
+    for archived in ("false", "true"):
+        after: Optional[str] = None
+        while True:
+            params: Dict[str, Any] = {"limit": 100, "archived": archived}
+            if after:
+                params["after"] = after
+            data = await client.get("/crm/v3/owners", params=params)
+            owners.extend(data.get("results", []))
+            after = (data.get("paging", {}) or {}).get("next", {}).get("after")
+            if not after:
+                break
+    return owners
+
+
+async def fetch_users(client: HubSpotClient) -> List[Dict[str, Any]]:
+    """All portal users (settings API). Some deals' hs_created_by_user_id is a
+    USER id with no matching owner record (e.g. a user whose owner was deleted);
+    these fill the name-resolution gaps that fetch_owners can't cover."""
+    users: List[Dict[str, Any]] = []
     after: Optional[str] = None
     while True:
         params: Dict[str, Any] = {"limit": 100}
         if after:
             params["after"] = after
-        data = await client.get("/crm/v3/owners", params=params)
-        owners.extend(data.get("results", []))
+        data = await client.get("/settings/v3/users", params=params)
+        users.extend(data.get("results", []))
         after = (data.get("paging", {}) or {}).get("next", {}).get("after")
         if not after:
             break
-    return owners
+    return users

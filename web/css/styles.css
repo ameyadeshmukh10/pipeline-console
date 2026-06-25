@@ -174,3 +174,24 @@ label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; 
 .badge.commit { background: var(--good-soft); color: var(--good); }
 .badge.best { background: #eef1ff; color: var(--accent); }
 .badge.upside { background: #eef0f4; color: var(--ink-soft); }
+
+/* Pre-Pipeline: toggle chips, mode rows, granular per-creator tables */
+.chip-row, .mode-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 12px; }
+.mode-row label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-soft); }
+.mode-row select { padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: 6px; font-size: 12px; background: #fff; color: var(--ink); }
+.toggle-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--line-strong); border-radius: 14px; background: #fff; font-size: 12px; color: var(--ink-soft); cursor: pointer; line-height: 1.4; }
+.toggle-chip:hover { border-color: var(--accent); }
+.toggle-chip .dot { width: 8px; height: 8px; border-radius: 50%; opacity: .3; flex: none; }
+.toggle-chip.active { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); font-weight: 500; }
+.toggle-chip.active .dot { opacity: 1; }
+.caption { margin-top: 8px; max-width: 780px; line-height: 1.5; }
+details.more { margin-top: 12px; }
+details.more > summary { cursor: pointer; font-size: 12px; color: var(--ink-soft); user-select: none; padding: 4px 0; }
+details.more > summary:hover { color: var(--accent); }
+.grid-table { border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+.grid-table th, .grid-table td { padding: 4px 9px; border-bottom: 1px solid var(--line); text-align: right; }
+.grid-table th { color: var(--muted); font-weight: 600; }
+.grid-table th.sticky, .grid-table td.sticky { position: sticky; left: 0; background: #fff; text-align: left; z-index: 1; font-weight: 500; color: var(--ink); }
+.grid-table tr.agg-row td, .grid-table tr.agg-row th { font-weight: 700; background: var(--accent-soft); color: var(--ink); }
+.grid-table tr.agg-row td.sticky { background: var(--accent-soft); }
+.grid-table .muted { font-size: 10px; }
