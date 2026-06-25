@@ -71,3 +71,26 @@ recomputes metrics from the existing mirror — no re-fetch.
 
 Covers stage-timeline derivation (skip/stall/reopen), the statistics helpers, and the flag
 rules + stage-order closure.
+
+## Deploy to Railway
+
+The repo is Railway-ready (`railway.json` pins the start command, healthcheck, and a single
+replica; `.python-version` pins Python 3.12; `requirements.txt` is pinned + includes `tzdata`).
+
+1. **Railway → New Project → Deploy from GitHub repo** → select `pipeline-console`.
+2. In the service's **Variables**, set:
+   - `HUBSPOT_ACCESS_TOKEN` — your HubSpot private-app token (required)
+   - `ANTHROPIC_API_KEY` — required for the Forecast "Run agent" feature
+   - *(optional)* `FORECAST_MODEL`, `CLAUDE_SOURCING_MODEL`, `PIPELINE_ID`, `QUARTER_START`,
+     `TIMEZONE`, `HUBSPOT_BASE_URL` — all have sensible defaults.
+   - **Do not set `PORT`** — Railway injects it; the app binds `0.0.0.0:$PORT`.
+3. Deploy. Once the healthcheck (`/api/health`) passes, open the generated
+   `*.up.railway.app` URL and click **Sync now** to pull from HubSpot.
+
+**Notes**
+- **Storage is ephemeral**: the SQLite mirror resets on every deploy/restart — just click
+  **Sync now** again (~15s; HubSpot is the source of truth). To persist it, attach a Railway
+  **Volume** mounted at e.g. `/data` and set `DATA_DIR=/data` (no code change needed).
+- **Keep a single replica.** Sync state is in-process and the DB is one SQLite file, so do not
+  scale to multiple replicas/instances (`numReplicas` is pinned to 1 in `railway.json`).
+- Pushing to `main` triggers an automatic redeploy.

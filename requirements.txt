@@ -1,15 +1,16 @@
-# Web stack (already present in the system interpreter; pinned for reproducibility)
-fastapi>=0.128
-uvicorn[standard]>=0.39
-httpx>=0.28
-pydantic>=2.13
-python-dotenv>=1.2
-tenacity>=9.1
-jinja2>=3.1
-
-# New runtime deps
-anthropic>=0.40
-aiosqlite>=0.20
+# Runtime — pinned to locally-tested versions for reproducible Railway builds.
+fastapi==0.128.8
+uvicorn[standard]==0.39.0
+httpx==0.28.1
+pydantic==2.13.4
+python-dotenv==1.2.1
+tenacity==9.1.2
+jinja2==3.1.6
+anthropic==0.112.0
+aiosqlite==0.22.1
+# Required on slim Linux images so zoneinfo("America/New_York") resolves
+# (otherwise metrics/windows.py silently falls back to UTC and ISO weeks shift).
+tzdata>=2024.1
 
 # Dev / tests
 pytest>=8

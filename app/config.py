@@ -25,9 +25,10 @@ class Settings:
     QUARTER_START: str = os.getenv("QUARTER_START", "2026-04-01")
     TIMEZONE: str = os.getenv("TIMEZONE", "America/New_York")
 
-    # Paths
-    DATA_DIR: Path = ROOT / "data"
-    DB_PATH: str = str(ROOT / "data" / "pipeline.db")
+    # Paths (DATA_DIR / DB_PATH are env-overridable so a Railway volume can be
+    # attached later with no code change; default keeps local/ephemeral behavior).
+    DATA_DIR: Path = Path(os.getenv("DATA_DIR", str(ROOT / "data")))
+    DB_PATH: str = os.getenv("DB_PATH", str(DATA_DIR / "pipeline.db"))
     WEB_DIR: Path = ROOT / "web"
 
     @property
@@ -41,3 +42,4 @@ class Settings:
 
 settings = Settings()
 settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
+Path(settings.DB_PATH).parent.mkdir(parents=True, exist_ok=True)

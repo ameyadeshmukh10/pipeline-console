@@ -16,6 +16,12 @@ from .sync.status import sync_manager
 router = APIRouter()
 
 
+@router.get("/health")
+async def health() -> Dict[str, Any]:
+    """Liveness probe for Railway (no DB access — fast, always 200 once booted)."""
+    return {"status": "ok"}
+
+
 @router.post("/sync")
 async def trigger_sync() -> Dict[str, Any]:
     """Kick off a manual sync in the background. 409 if one is already running."""
