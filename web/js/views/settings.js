@@ -12,6 +12,8 @@ export async function render(el, ctx) {
   const meta = ctx.meta || (await api.meta());
   const d = await api.settings();
   const v = d.values;
+  const creators = d.creators || [];
+  let groups = [...(v.creator_groups || [])];
   const probs = v.stage_probabilities || {};
   const aeT = v.ae_targets || {};
   const openStages = meta.stages.filter((s) => s.is_open || s.is_won);
@@ -48,10 +50,45 @@ export async function render(el, ctx) {
       ${d.off_roster_owners.length ? `<div class="muted small" style="margin-top:10px">Off-roster owners on deals (bucketed Other/Unknown): ${d.off_roster_owners.map((o) => `${o.owner_id} (${o.n})`).join(", ")}</div>` : ""}
     </div>
 
+    <div class="panel"><h3>Creator Groups <span class="panel-sub">pool deal creators to assess together on Pre-Pipeline</span></h3>
+      <div id="grp-list"></div>
+      <div class="grp-new">
+        <input id="grp-name" type="text" placeholder="Group name (e.g. Current SDRs)" class="grp-name-input"/>
+        <div class="grp-members" id="grp-members">
+          ${creators.map((c) => `<label class="grp-mem"><input type="checkbox" value="${esc(c.id || "unknown")}"/> ${esc(c.first_name)} <span class="muted small">${esc(c.name)}</span></label>`).join("")}
+        </div>
+        <button id="grp-add" class="btn-ghost">+ Add group</button>
+      </div>
+    </div>
+
     <div style="margin-top:16px;display:flex;gap:12px;align-items:center">
       <button id="set-save" class="btn-primary">Save & recompute</button>
       <span id="set-msg" class="muted small"></span>
     </div>`;
+
+  const nameById = {};
+  creators.forEach((c) => { nameById[c.id || "unknown"] = c.first_name; });
+  function renderGroups() {
+    const box = el.querySelector("#grp-list");
+    if (!groups.length) { box.innerHTML = `<div class="muted small">No groups yet — name one and pick its creators below.</div>`; return; }
+    box.innerHTML = groups.map((g, i) => `<div class="grp-item">
+        <strong>▣ ${esc(g.name)}</strong>
+        <span class="muted small">${(g.member_ids || []).map((m) => esc(nameById[m] || m)).join(", ")}</span>
+        <button data-i="${i}" class="grp-del">Remove</button></div>`).join("");
+    box.querySelectorAll(".grp-del").forEach((b) => { b.onclick = () => { groups.splice(+b.dataset.i, 1); renderGroups(); }; });
+  }
+  renderGroups();
+  el.querySelector("#grp-add").onclick = () => {
+    const name = el.querySelector("#grp-name").value.trim();
+    const members = [...el.querySelectorAll("#grp-members input:checked")].map((i) => i.value);
+    if (!name || !members.length) return;
+    let id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || ("g" + groups.length);
+    while (groups.some((g) => g.id === id)) id += "-" + groups.length;
+    groups.push({ id, name, member_ids: members });
+    el.querySelector("#grp-name").value = "";
+    el.querySelectorAll("#grp-members input:checked").forEach((i) => { i.checked = false; });
+    renderGroups();
+  };
 
   el.querySelector("#set-save").onclick = async () => {
     const values = {};
@@ -63,6 +100,7 @@ export async function render(el, ctx) {
     const at = {};
     el.querySelectorAll("[data-aet]").forEach((i) => { if (i.value !== "") at[i.dataset.aet] = +i.value; });
     values.ae_targets = at;
+    values.creator_groups = groups;
     const msg = el.querySelector("#set-msg");
     msg.textContent = "Saving…";
     try { await api.putSettings(values); msg.textContent = "Saved. Metrics use the new settings on next view load."; }

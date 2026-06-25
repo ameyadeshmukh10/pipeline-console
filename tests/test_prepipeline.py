@@ -8,7 +8,8 @@ from datetime import timezone
 from app.metrics.common import DealView
 from app.metrics.prepipeline import (compute_conversion, compute_created,
                                      compute_speed_to_s1, creator_key, in_quarter)
-from app.metrics.series import pooled_mean_series, pooled_rate_series
+from app.metrics.series import (fit_line, pooled_count_series,
+                                pooled_mean_series, pooled_rate_series)
 from app.metrics.windows import (iso_week_key, iso_weeks_in_range, parse_ts,
                                  quarter_end_dt, quarter_start_dt)
 
@@ -162,3 +163,76 @@ def test_created_attributes_by_creator_and_unknown_bucket():
     assert res["by_creator"]["unknown"][i] == 1
     assert res["aggregate"][i] == 3
     assert creator_key(deals[2]) == "unknown"
+
+
+# --------------------------------------------------------------------------- #
+# Count series + fitted trend line (new trend views)
+# --------------------------------------------------------------------------- #
+def test_pooled_count_series_rolling_cumulative_pace():
+    weeks = [(2026, 15), (2026, 16), (2026, 17), (2026, 18), (2026, 19)]
+    s = pooled_count_series([2, 4, 6, 8, 10], weeks, window=4)
+    assert s["weekly"] == [2, 4, 6, 8, 10]
+    assert s["cumulative"] == [2, 6, 12, 20, 30]          # running sum
+    assert s["rolling4"][0] == 2                           # only itself
+    assert s["rolling4"][4] == 7.0                         # mean(4,6,8,10)
+    assert s["pace"] == [6, 12, 18, 24, 30]                # avg_rate=6 * (i+1)
+
+
+def test_pooled_count_series_pace_uses_complete_weeks_only():
+    weeks = [(2026, 15), (2026, 16), (2026, 17)]
+    s = pooled_count_series([10, 10, 2], weeks, complete=[True, True, False])
+    assert s["pace"] == [10, 20, 30]                       # avg over the 2 complete weeks
+
+
+def test_fit_line_direction_and_partial_exclusion():
+    weeks = [(2026, w) for w in range(15, 23)]             # 8 weeks
+    full = [True] * 8
+    up = fit_line([1, 2, 3, 4, 5, 6, 7, 8], weeks, full)
+    assert up["slope"] > 0 and up["direction"] == "rising" and len(up["y"]) == 8
+    assert fit_line([8, 7, 6, 5, 4, 3, 2, 1], weeks, full)["slope"] < 0
+    # the partial (incomplete) trailing week must not drag the slope
+    w3 = [(2026, 15), (2026, 16), (2026, 17)]
+    f = fit_line([10, 10, 0], w3, [True, True, False])
+    assert abs(f["slope"]) < 1e-9
+
+
+# --------------------------------------------------------------------------- #
+# Group pooling (linear in components) + no-regression
+# --------------------------------------------------------------------------- #
+G = [{"id": "g1", "name": "G", "member_ids": ["A", "B"]}]
+LATE = parse_ts("2026-06-30T00:00:00Z")
+
+
+def test_group_created_counts_sum_members():
+    create = "2026-05-04T12:00:00Z"
+    deals = [mk("A", create, {0: create}), mk("A", create, {0: create}),
+             mk("B", create, {0: create})]
+    res = compute_created(deals, WEEKS, QSTART, LATE, G)
+    i = wk_index(create)
+    assert res["by_group"]["g1"][i] == 3
+    assert res["series"]["by_group"]["g1"]["weekly"][i] == 3
+
+
+def test_group_conversion_pools_num_den():
+    create = "2026-05-04T12:00:00Z"
+    deals = [mk("A", create, {0: create, 1: "2026-05-06T12:00:00Z"}, current_order=1) for _ in range(3)]
+    deals.append(mk("B", create, {0: create, 1: "2026-05-06T12:00:00Z"}, current_order=1))
+    deals += [mk("B", create, {0: create, 7: "2026-05-07T12:00:00Z"}, is_open=0, current_order=7) for _ in range(2)]
+    cell = compute_conversion(deals, WEEKS, groups=G)["by_group"]["g1"]["weekly"][wk_index(create)]
+    assert cell["advanced"] == 4 and cell["lost"] == 2     # pooled across A+B
+    assert abs(cell["rate"] - 4 / 6) < 1e-9
+
+
+def test_group_speed_pools_sum_days_n():
+    a = mk("A", "2026-05-04T00:00:00Z", {0: "2026-05-04T00:00:00Z", 1: "2026-05-14T00:00:00Z"}, current_order=1)
+    b = mk("B", "2026-05-10T00:00:00Z", {0: "2026-05-10T00:00:00Z", 1: "2026-05-14T00:00:00Z"}, current_order=1)
+    cell = compute_speed_to_s1([a, b], WEEKS, groups=G)["by_group"]["g1"]["weekly"][wk_index("2026-05-14T00:00:00Z")]
+    assert cell["n"] == 2 and abs(cell["avg"] - 7.0) < 1e-9  # (10+4)/2
+
+
+def test_no_regression_when_no_groups():
+    create = "2026-05-04T12:00:00Z"
+    deals = [mk("A", create, {0: create, 1: "2026-05-06T12:00:00Z"}, current_order=1)]
+    assert compute_created(deals, WEEKS, QSTART, LATE)["by_group"] == {}
+    assert compute_conversion(deals, WEEKS)["by_group"] == {}
+    assert compute_speed_to_s1(deals, WEEKS)["by_group"] == {}

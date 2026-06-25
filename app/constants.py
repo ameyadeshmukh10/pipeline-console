@@ -128,4 +128,5 @@ DEFAULT_SETTINGS: Dict[str, object] = {
     "ae_targets": {},                  # owner_id -> quarterly $ target
     "org_target": 0,
     "timezone": "America/New_York",
+    "creator_groups": [],              # [{id, name, member_ids:[creator_id...]}]
 }

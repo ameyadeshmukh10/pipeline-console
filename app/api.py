@@ -86,7 +86,10 @@ async def get_settings() -> Dict[str, Any]:
                LEFT JOIN owner_roles r ON r.owner_id = d.owner_id
                WHERE r.owner_id IS NULL AND d.owner_id IS NOT NULL AND d.owner_id <> ''
                GROUP BY d.owner_id ORDER BY n DESC""")).fetchall())
-        return {"values": values, "roster": roles, "off_roster_owners": off}
+        from .metrics.prepipeline import list_creators
+        creators = await list_creators(conn)
+        return {"values": values, "roster": roles, "off_roster_owners": off,
+                "creators": creators}
     finally:
         await conn.close()
 

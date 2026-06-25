@@ -11,9 +11,62 @@ For means we pool (sum_of_values, n); for rates we pool (advanced, lost). This
 is the statistically correct way to "manufacture sample size" — a 4-week
 rolling rate is Σadvanced / Σ(advanced+lost), not the mean of four weekly rates.
 """
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
+
+from .stats import median, theil_sen, trend
 
 Week = Tuple[int, int]
+
+
+def pooled_count_series(counts: List[int], weeks: List[Week], window: int = 4,
+                        complete: Optional[List[bool]] = None) -> Dict[str, List]:
+    """Three views of a weekly COUNT series, aligned to `weeks`:
+      weekly     = raw counts
+      rolling4   = trailing mean of the last `window` weekly counts (signal vs noise)
+      cumulative = running total
+      pace       = constant-average-rate reference for the cumulative view
+                   (avg_rate*(i+1), avg_rate over COMPLETE weeks only)
+    """
+    n = len(weeks)
+    weekly = [int(c or 0) for c in counts]
+    if complete is None:
+        complete = [True] * n
+    rolling: List[Optional[float]] = []
+    cumulative: List[int] = []
+    run = 0
+    for i in range(n):
+        win = weekly[max(0, i - window + 1):i + 1]
+        rolling.append(sum(win) / len(win) if win else None)
+        run += weekly[i]
+        cumulative.append(run)
+    comp = [weekly[i] for i in range(n) if complete[i]]
+    avg_rate = (sum(comp) / len(comp)) if comp else 0.0
+    pace = [avg_rate * (i + 1) for i in range(n)]
+    return {"weekly": weekly, "rolling4": rolling, "cumulative": cumulative, "pace": pace}
+
+
+def fit_line(counts: List[int], weeks: List[Week],
+             complete: List[bool]) -> Optional[Dict]:
+    """Robust (Theil-Sen) straight-line fit over COMPLETE weeks only, returned as
+    a y-value per week so it can be drawn across the whole chart. Excluding the
+    partial (current) week stops it from faking a downturn."""
+    pts = [(float(i), float(counts[i])) for i in range(len(weeks))
+           if complete[i] and counts[i] is not None]
+    if len(pts) < 2:
+        return None
+    direction = trend(pts, min_n=4, metric="count")["direction"]
+    # Tie the drawn line to the significance verdict: a horizontal baseline at
+    # the median when the net trend is flat/insufficient (so it matches the
+    # "flat" tag and never implies a slope through hump-shaped data); a robust
+    # Theil-Sen slope only when the trend is statistically real.
+    if direction in ("flat", "insufficient_data"):
+        level = median([y for _, y in pts]) or 0.0
+        return {"slope": 0.0, "intercept": level,
+                "y": [level] * len(weeks), "direction": direction}
+    slope = theil_sen(pts) or 0.0
+    intercept = median([y - slope * t for t, y in pts]) or 0.0
+    y = [slope * i + intercept for i in range(len(weeks))]
+    return {"slope": slope, "intercept": intercept, "y": y, "direction": direction}
 
 
 def pooled_mean_series(comp: Dict[Week, Dict[str, float]], weeks: List[Week],

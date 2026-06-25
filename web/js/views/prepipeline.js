@@ -3,11 +3,17 @@ import { esc, info, trendTag } from "../util.js";
 import { chart, PALETTE, gridOpts } from "../charts.js";
 
 const AGG = "#11203a";
+const GPAL = ["#7c3aed", "#0e7490", "#b91c1c", "#15803d", "#a16207", "#9d174d", "#1e3a8a", "#9333ea"];
 const r1 = (v) => (v == null ? null : Math.round(v * 10) / 10);
 const ck = (c) => c.id || "unknown";
+const gk = (g) => "g:" + g.id;
 const color = (i) => PALETTE[i % PALETTE.length];
+const gcolor = (i) => GPAL[i % GPAL.length];
 const wlabel = (w) => w.replace(/^\d{4}-/, "");
 
+const MODE_LABEL = { weekly: "Weekly", rolling4: "4-wk rolling", cumulative: "Cumulative" };
+const TREND_TIP =
+  "Weekly / 4-wk rolling: a robust Theil-Sen straight-line fit over the COMPLETE weeks only (the partial current week is dropped so it can't fake a dip) — read its slope for net direction, and the 4-wk rolling line for the actual shape. Cumulative: a constant-average-rate pace line — actual pulling above it = accelerating, flattening below = slowing.";
 const TIP = {
   weekly:
     "Isolated weekly: the window is one week, so you need ~80–100 resolved deals that week to trust any single point at ±10. Most B2B funnels never hit that weekly at Stage 0→1. Below ~30/week the points are basically decorative — directional at best, and you should not react to a single week's movement. This is exactly why isolated weekly is the noisy option.",
@@ -17,11 +23,12 @@ const TIP = {
     "Cumulative QTD: self-solving over time. Early weeks are garbage (week 1 = one week of data), but n grows every week, so by mid-quarter you're pooling 100+ almost regardless of weekly rate, and by quarter-end the interval is tight. The tradeoff isn't sample size, it's staleness — it's statistically accurate but increasingly insensitive to recent change.",
 };
 const SPEED_TIP =
-  "For each week, the average days from Stage 0 to Stage 1 across deals that ENTERED Stage 1 that week, attributed to the deal's creator. Weekly = that week alone; 4-wk rolling and Cumulative pool the underlying deals (not averages of averages) to manufacture sample size.";
+  "For each week, the average days from Stage 0 to Stage 1 across deals that ENTERED Stage 1 that week, attributed to the deal's creator. Weekly = that week alone; 4-wk rolling and Cumulative pool the underlying deals (not averages of averages).";
 
 export async function render(el) {
   const d = await api.prepipeline();
   const weeks = d.weeks;
+  const groups = d.groups || [];
 
   el.innerHTML = `
     <div class="grid kpis">
@@ -32,7 +39,13 @@ export async function render(el) {
 
     <div class="panel">
       <h3>Weekly Stage-0 Created <span class="panel-sub">by creator · scoped to createdate in quarter</span></h3>
-      <div id="pp-created-chips" class="chip-row"></div>
+      <div class="mode-row">
+        <div class="seg" id="pp-cr-mode">${["weekly", "rolling4", "cumulative"].map((m) =>
+          `<button data-m="${m}"${m === "weekly" ? ' class="active"' : ""}>${MODE_LABEL[m]}</button>`).join("")}</div>
+        <label class="check"><input type="checkbox" id="pp-cr-trend"/> Trend line ${info(TREND_TIP)}</label>
+      </div>
+      <div id="pp-cr-chips" class="chip-row"></div>
+      ${groups.length ? `<div id="pp-cr-groups" class="chip-row group-row"></div>` : ""}
       <div class="chart-wrap"><canvas id="pp-created"></canvas></div>
       <details class="more"><summary>Per-creator weekly counts</summary>
         <div class="table-scroll" id="pp-created-table"></div></details>
@@ -64,54 +77,94 @@ export async function render(el) {
         <div class="table-scroll" id="pp-conv-table"></div></details>
     </div>`;
 
-  buildCreated(d, weeks);
-  buildSpeed(d, weeks);
-  buildConversion(d, weeks);
+  buildCreated(d, weeks, groups);
+  buildSpeed(d, weeks, groups);
+  buildConversion(d, weeks, groups);
 }
 
 // --------------------------------------------------------------------------- //
-// Section 1 — Weekly Stage-0 Created (per-creator lines + toggle chips)
+// Section 1 — Stage-0 Created: mode selector + trend line + creator/group lines
 // --------------------------------------------------------------------------- //
-function buildCreated(d, weeks) {
-  const zeros = weeks.map(() => 0);
-  const datasets = [
-    { label: "Aggregate", data: d.created.aggregate, borderColor: AGG, backgroundColor: AGG,
-      borderWidth: 2.5, tension: 0.3, pointRadius: 2 },
-    ...d.creators.map((c, i) => ({
-      label: c.first_name, data: d.created.by_creator[ck(c)] || zeros,
-      borderColor: color(i), backgroundColor: color(i), borderWidth: 1.5,
-      tension: 0.3, pointRadius: 0, hidden: true,
-    })),
-  ];
-  const ch = chart("pp-created", {
-    type: "line", data: { labels: weeks, datasets },
-    options: { ...gridOpts, plugins: { legend: { display: false } } },
-  });
+function buildCreated(d, weeks, groups) {
+  const S = d.created.series;
+  const state = { mode: "weekly", trend: false, visible: new Set(["agg"]) };
 
-  const chips = [{ label: "Aggregate", idx: 0, active: true, dot: AGG, title: "All creators combined" }]
-    .concat(d.creators.map((c, i) => ({
-      label: c.first_name, idx: i + 1, active: false, dot: color(i),
-      title: c.name + (c.role ? ` · ${c.role}` : "") + (c.archived ? " · archived" : "") + ` · ${c.total_created} created`,
-    })));
-  document.getElementById("pp-created-chips").innerHTML = chips.map((c) =>
-    `<button class="toggle-chip${c.active ? " active" : ""}" data-idx="${c.idx}" title="${esc(c.title)}">
-       <span class="dot" style="background:${c.dot}"></span>${esc(c.label)}</button>`).join("");
-  document.querySelectorAll("#pp-created-chips .toggle-chip").forEach((btn) => {
-    btn.onclick = () => {
-      const ds = ch.data.datasets[+btn.dataset.idx];
-      ds.hidden = !ds.hidden;
-      btn.classList.toggle("active", !ds.hidden);
-      ch.update();
+  const seriesVal = (s) => (state.mode === "cumulative" ? s.cumulative
+    : state.mode === "rolling4" ? s.rolling4 : s.weekly);
+
+  function draw() {
+    const ds = [];
+    const addLine = (key, label, data, col, width) => {
+      if (!state.visible.has(key) || !data) return;
+      ds.push({ label, data: data.map(r1), borderColor: col, backgroundColor: col,
+        borderWidth: width, tension: 0.3, pointRadius: width >= 2.5 ? 2 : 0, spanGaps: true });
+    };
+    const addRef = (key, label, data, col) => {
+      if (!state.trend || !state.visible.has(key) || !data) return;
+      ds.push({ label, data: data.map(r1), borderColor: col, borderDash: [6, 4],
+        borderWidth: 1.5, pointRadius: 0, tension: 0, spanGaps: true });
+    };
+    addLine("agg", "Aggregate", seriesVal(S.aggregate), AGG, 2.5);
+    d.creators.forEach((c, i) => addLine(ck(c), c.first_name, seriesVal(S.by_creator[ck(c)]), color(i), 1.5));
+    groups.forEach((g, gi) => addLine(gk(g), g.name, seriesVal(S.by_group[g.id]), gcolor(gi), 3));
+    // reference line: fitted trend (weekly/rolling) or pace (cumulative), for aggregate + visible groups
+    const refOf = (s) => (state.mode === "cumulative" ? s.pace : (s.fit ? s.fit.y : null));
+    addRef("agg", "Aggregate " + (state.mode === "cumulative" ? "pace" : "trend"), refOf(S.aggregate), AGG);
+    groups.forEach((g, gi) => addRef(gk(g), g.name + (state.mode === "cumulative" ? " pace" : " trend"), refOf(S.by_group[g.id]), gcolor(gi)));
+
+    chart("pp-created", { type: "line", data: { labels: weeks, datasets: ds },
+      options: { ...gridOpts, plugins: { legend: { display: false } } } });
+  }
+
+  // mode segmented control
+  document.querySelectorAll("#pp-cr-mode button").forEach((b) => {
+    b.onclick = () => {
+      state.mode = b.dataset.m;
+      document.querySelectorAll("#pp-cr-mode button").forEach((x) => x.classList.toggle("active", x === b));
+      draw();
     };
   });
+  document.getElementById("pp-cr-trend").onchange = (e) => { state.trend = e.target.checked; draw(); };
 
-  document.getElementById("pp-created-table").innerHTML = countTable(d, weeks);
+  // creator chips
+  const chips = [{ key: "agg", label: "Aggregate", dot: AGG, title: "All creators combined" }]
+    .concat(d.creators.map((c, i) => ({
+      key: ck(c), label: c.first_name, dot: color(i),
+      title: c.name + (c.role ? ` · ${c.role}` : "") + (c.archived ? " · archived" : "") + ` · ${c.total_created} created`,
+    })));
+  renderChips("pp-cr-chips", chips, state, draw);
+
+  // group chips (distinct styling)
+  if (groups.length) {
+    const gchips = groups.map((g, gi) => ({
+      key: gk(g), label: "▣ " + g.name, dot: gcolor(gi),
+      title: g.member_names.join(", ") + ` · ${g.total_created} created`,
+    }));
+    renderChips("pp-cr-groups", gchips, state, draw);
+  }
+
+  draw();
+  document.getElementById("pp-created-table").innerHTML = countTable(d, weeks, groups);
+}
+
+function renderChips(containerId, chips, state, draw) {
+  document.getElementById(containerId).innerHTML = chips.map((c) =>
+    `<button class="toggle-chip${state.visible.has(c.key) ? " active" : ""}" data-key="${esc(c.key)}" title="${esc(c.title)}">
+       <span class="dot" style="background:${c.dot}"></span>${esc(c.label)}</button>`).join("");
+  document.querySelectorAll(`#${containerId} .toggle-chip`).forEach((btn) => {
+    btn.onclick = () => {
+      const key = btn.dataset.key;
+      if (state.visible.has(key)) state.visible.delete(key); else state.visible.add(key);
+      btn.classList.toggle("active");
+      draw();
+    };
+  });
 }
 
 // --------------------------------------------------------------------------- //
-// Section 2 — Weekly Speed to Stage 1 (3 overlay toggles + per-creator table)
+// Section 2 — Speed to S1 (chart unchanged; group rows added to the table)
 // --------------------------------------------------------------------------- //
-function buildSpeed(d, weeks) {
+function buildSpeed(d, weeks, groups) {
   const sp = d.speed.aggregate;
   const modes = [
     ["weekly", "Weekly Average", PALETTE[0], true],
@@ -122,11 +175,9 @@ function buildSpeed(d, weeks) {
     label: lbl, data: sp[k].map((c) => r1(c.avg)), borderColor: col, backgroundColor: col,
     tension: 0.3, spanGaps: true, pointRadius: 2, hidden: !vis,
   }));
-  const ch = chart("pp-speed", {
-    type: "line", data: { labels: weeks, datasets },
+  const ch = chart("pp-speed", { type: "line", data: { labels: weeks, datasets },
     options: { ...gridOpts, scales: { ...gridOpts.scales,
-      y: { ...gridOpts.scales.y, ticks: { callback: (v) => v + "d" } } } },
-  });
+      y: { ...gridOpts.scales.y, ticks: { callback: (v) => v + "d" } } } } });
   document.getElementById("pp-speed-modes").innerHTML = modes.map(([k, lbl, col, vis], i) =>
     `<button class="toggle-chip${vis ? " active" : ""}" data-i="${i}">
        <span class="dot" style="background:${col}"></span>${lbl}</button>`).join("");
@@ -138,38 +189,33 @@ function buildSpeed(d, weeks) {
       ch.update();
     };
   });
-  document.getElementById("pp-speed-table").innerHTML = meanTable(d, weeks);
+  document.getElementById("pp-speed-table").innerHTML = meanTable(d, weeks, groups);
 }
 
 // --------------------------------------------------------------------------- //
-// Section 3 — Weekly S0→S1 Conversion (dropdown + tooltips + per-creator table)
+// Section 3 — Conversion (chart unchanged; group rows added to the table)
 // --------------------------------------------------------------------------- //
-function buildConversion(d, weeks) {
+function buildConversion(d, weeks, groups) {
   const sel = document.getElementById("pp-conv-mode");
-  document.getElementById("pp-conv-info").innerHTML =
-    info(TIP.weekly + "\n\n" + TIP.rolling4 + "\n\n" + TIP.cumulative);
-
+  document.getElementById("pp-conv-info").innerHTML = info(TIP.weekly + "\n\n" + TIP.rolling4 + "\n\n" + TIP.cumulative);
   const draw = () => {
     const mode = sel.value;
     const series = d.conversion.aggregate[mode];
-    chart("pp-conv", {
-      type: "line",
-      data: { labels: weeks, datasets: [{
-        label: "S0→S1 %", data: series.map((c) => (c.rate == null ? null : r1(c.rate * 100))),
-        borderColor: PALETTE[0], backgroundColor: PALETTE[0], tension: 0.3, spanGaps: true, pointRadius: 2,
-      }] },
+    chart("pp-conv", { type: "line",
+      data: { labels: weeks, datasets: [{ label: "S0→S1 %",
+        data: series.map((c) => (c.rate == null ? null : r1(c.rate * 100))),
+        borderColor: PALETTE[0], backgroundColor: PALETTE[0], tension: 0.3, spanGaps: true, pointRadius: 2 }] },
       options: { ...gridOpts, scales: { ...gridOpts.scales,
-        y: { ...gridOpts.scales.y, ticks: { callback: (v) => v + "%" } } } },
-    });
+        y: { ...gridOpts.scales.y, ticks: { callback: (v) => v + "%" } } } } });
     document.getElementById("pp-conv-caption").textContent = TIP[mode];
-    document.getElementById("pp-conv-table").innerHTML = rateTable(d, weeks, mode);
+    document.getElementById("pp-conv-table").innerHTML = rateTable(d, weeks, mode, groups);
   };
   sel.onchange = draw;
   draw();
 }
 
 // --------------------------------------------------------------------------- //
-// Tables (granular, per-creator)
+// Tables (granular, per-creator; pinned pooled group rows)
 // --------------------------------------------------------------------------- //
 function header(weeks, extra = "") {
   return `<tr><th class="sticky">Creator</th>${weeks.map((w) => `<th class="num">${wlabel(w)}</th>`).join("")}${extra}</tr>`;
@@ -177,9 +223,16 @@ function header(weeks, extra = "") {
 function nameCell(c) {
   return `<td class="sticky" title="${esc(c.name)}">${esc(c.first_name)}${c.archived ? ' <span class="muted">·arch</span>' : ""}</td>`;
 }
+function groupNameCell(g) {
+  return `<td class="sticky" title="${esc(g.member_names.join(", "))}">▣ ${esc(g.name)}</td>`;
+}
 
-function countTable(d, weeks) {
+function countTable(d, weeks, groups) {
   const rows = [`<tr class="agg-row"><td class="sticky">Aggregate</td>${d.created.aggregate.map((v) => `<td class="num">${v || "—"}</td>`).join("")}<td class="num">${d.totals.stage0_created}</td></tr>`];
+  for (const g of groups) {
+    const arr = d.created.by_group[g.id] || [];
+    rows.push(`<tr class="group-pin">${groupNameCell(g)}${weeks.map((_, i) => `<td class="num">${arr[i] || "—"}</td>`).join("")}<td class="num">${g.total_created}</td></tr>`);
+  }
   for (const c of d.creators) {
     const arr = d.created.by_creator[ck(c)] || [];
     rows.push(`<tr>${nameCell(c)}${weeks.map((_, i) => `<td class="num">${arr[i] || "—"}</td>`).join("")}<td class="num">${c.total_created}</td></tr>`);
@@ -190,8 +243,13 @@ function countTable(d, weeks) {
 function meanCell(c) {
   return c && c.n ? `${Math.round(c.avg * 10) / 10}<span class="muted"> (${c.n})</span>` : "—";
 }
-function meanTable(d, weeks) {
+function meanTable(d, weeks, groups) {
   const rows = [`<tr class="agg-row"><td class="sticky">Aggregate</td>${d.speed.aggregate.weekly.map((c) => `<td class="num">${meanCell(c)}</td>`).join("")}</tr>`];
+  for (const g of groups) {
+    const s = (d.speed.by_group || {})[g.id];
+    if (!s) continue;
+    rows.push(`<tr class="group-pin">${groupNameCell(g)}${s.weekly.map((x) => `<td class="num">${meanCell(x)}</td>`).join("")}</tr>`);
+  }
   for (const c of d.creators) {
     const s = d.speed.by_creator[ck(c)];
     if (!s) continue;
@@ -203,8 +261,13 @@ function meanTable(d, weeks) {
 function rateCell(c) {
   return c && c.denom ? `${Math.round(c.rate * 100)}%<span class="muted"> (${c.denom})</span>` : "—";
 }
-function rateTable(d, weeks, mode) {
+function rateTable(d, weeks, mode, groups) {
   const rows = [`<tr class="agg-row"><td class="sticky">Aggregate</td>${d.conversion.aggregate[mode].map((c) => `<td class="num">${rateCell(c)}</td>`).join("")}</tr>`];
+  for (const g of groups) {
+    const s = (d.conversion.by_group || {})[g.id];
+    if (!s) continue;
+    rows.push(`<tr class="group-pin">${groupNameCell(g)}${s[mode].map((x) => `<td class="num">${rateCell(x)}</td>`).join("")}</tr>`);
+  }
   for (const c of d.creators) {
     const s = d.conversion.by_creator[ck(c)];
     if (!s) continue;
