@@ -23,7 +23,7 @@ from .common import (DealView, disambiguate_first_names, load_deal_views,
                      pool_value_lists, sum_lists)
 from .series import (fit_line, pooled_count_series, pooled_mean_series,
                      pooled_median_series, pooled_rate_series)
-from .stats import describe
+from .stats import describe, median
 from .windows import (days_between, iso_week_key, iso_weeks_in_range, now_utc,
                       quarter_end_dt, quarter_start_dt, week_label)
 
@@ -160,6 +160,30 @@ def compute_gate(deals: List[DealView], weeks: List[Week], n: int,
     }
 
 
+def _stat_pair(vals: List[float]) -> Dict[str, Any]:
+    return {"median": median(vals), "mean": (sum(vals) / len(vals)) if vals else None, "n": len(vals)}
+
+
+def velocity_s1_s3_periods(deals: List[DealView], qstart: datetime, qend: datetime) -> Dict[str, Any]:
+    """S1->S3 days (entry S1 -> reach S3), split into thirds of the quarter by the
+    week the deal REACHED S3 — so you can see velocity drift across the quarter."""
+    total = (qend - qstart).total_seconds() or 1.0
+    third_keys = ["first_third", "second_third", "last_third"]
+    buckets: Dict[str, List[float]] = {"full": [], "first_third": [], "second_third": [], "last_third": []}
+    for v in deals:
+        a = v.entries.get(1)
+        b = v.first_reach(3)
+        if a is None or not _in(b, qstart, qend):
+            continue
+        d = days_between(a, b)
+        if d is None or d < 0:
+            continue
+        buckets["full"].append(d)
+        idx = min(2, max(0, int(((b - qstart).total_seconds() / total) * 3)))
+        buckets[third_keys[idx]].append(d)
+    return {k: _stat_pair(vals) for k, vals in buckets.items()}
+
+
 def funnel_summary(deals: List[DealView], qstart: datetime, qend: datetime) -> Dict[str, Any]:
     """Per-gate QTD conversion over the Q2 cohort + the full-funnel product."""
     gates: List[Dict[str, Any]] = []
@@ -263,6 +287,15 @@ async def execution_report(conn: aiosqlite.Connection) -> Dict[str, Any]:
     conversion = {f"{STAGE_SHORTS[n]}_{STAGE_SHORTS[m]}": compute_gate(deals, weeks, n, qstart, qend, groups)
                   for (n, m) in GATES}
 
+    # Fitted trend line for the aggregate velocity (per stat) + conversion lines.
+    complete = [not partial_week(wk, qstart, now) for wk in weeks]
+    for V in velocity.values():
+        for stat in ("median", "mean"):
+            V["aggregate"][stat]["fit"] = fit_line([c["avg"] for c in V["aggregate"][stat]["weekly"]], weeks, complete)
+    for C in conversion.values():
+        C["aggregate"]["fit"] = fit_line(
+            [(c["rate"] * 100 if c["rate"] is not None else None) for c in C["aggregate"]["weekly"]], weeks, complete)
+
     return {
         "weeks": [week_label(*wk) for wk in weeks],
         "owners": owners,
@@ -273,7 +306,9 @@ async def execution_report(conn: aiosqlite.Connection) -> Dict[str, Any]:
         "gates": [{"key": f"{STAGE_SHORTS[n]}_{STAGE_SHORTS[m]}",
                    "label": f"{STAGE_SHORTS[n]}→{STAGE_SHORTS[m]}"} for (n, m) in GATES],
         "entered": entered,
+        "entered_totals": {st: sum(E["aggregate"]) for st, E in entered.items()},
         "velocity": velocity,
+        "velocity_s1_s3": velocity_s1_s3_periods(deals, qstart, qend),
         "conversion": conversion,
         "funnel_summary": funnel_summary(deals, qstart, qend),
         "aging": _aging(deals, roles, s, now),

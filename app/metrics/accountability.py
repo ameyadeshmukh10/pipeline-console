@@ -73,7 +73,9 @@ async def deals_table(conn: aiosqlite.Connection, owner_id: Optional[str] = None
 async def deal_inspector(conn: aiosqlite.Connection, deal_id: str) -> Optional[Dict[str, Any]]:
     s = await db.get_all_settings(conn)
     roles = await load_role_sets(conn)
-    views = await load_deal_views(conn)
+    # roster_only=False — the inspector must open ANY deal (incl. off-roster /
+    # archived owners surfaced by aging, flags, etc.), not just roster-owned ones.
+    views = await load_deal_views(conn, roster_only=False)
     now = now_utc()
     v = views.get(deal_id)
     if v is None:

@@ -205,6 +205,31 @@ details.more > summary:hover { color: var(--accent); }
 .ex-sel { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-soft); }
 .ex-sel select { padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: 6px; font-size: 12px; background: #fff; color: var(--ink); }
 .filter-panel { padding-bottom: 10px; }
+.seg.sm button { padding: 2px 9px; font-size: 11px; }
+
+/* Execution stat cards */
+.stat-card .stat-head { display: flex; align-items: center; gap: 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 700; margin-bottom: 12px; }
+.stat-card .stat-head .seg { margin-left: auto; }
+.stat-rows { display: flex; flex-direction: column; gap: 7px; }
+.stat-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; }
+.stat-row .lbl { color: var(--ink-soft); }
+.stat-row .val { font-weight: 700; color: var(--ink); }
+.stat-row .n { color: var(--muted); font-size: 11px; font-weight: 400; }
+.stat-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.stat-cell { text-align: center; border-radius: 7px; padding: 6px 2px; background: var(--bg); }
+.stat-cell .sv { font-size: 20px; font-weight: 700; color: var(--ink); line-height: 1.1; }
+.stat-cell .sl { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+/* Prominent funnel flow */
+.funnel-panel .caption { max-width: 900px; margin: 4px 0 4px; }
+.funnel-flow { display: flex; align-items: stretch; gap: 6px; flex-wrap: wrap; margin-top: 14px; }
+.gate-card { flex: 1; min-width: 88px; border: 1px solid var(--line); border-radius: 9px; padding: 12px 8px; text-align: center; background: #fff; }
+.gate-card.full { background: var(--accent-soft); border-color: #dbe3ff; }
+.gate-label { font-size: 11px; color: var(--ink-soft); font-weight: 600; }
+.gate-rate { font-size: 23px; font-weight: 700; color: var(--ink); margin: 3px 0; }
+.gate-card.full .gate-rate { color: var(--accent); }
+.gate-sub { font-size: 10px; color: var(--muted); }
+.funnel-arrow { display: flex; align-items: center; color: var(--line-strong); font-size: 15px; }
 
 /* Group chips (dashed) + pinned pooled group rows */
 .chip-row.group-row { margin-top: 2px; }
