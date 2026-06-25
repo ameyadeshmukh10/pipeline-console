@@ -1,176 +1,281 @@
-"""Report 2 — Pipeline Execution (AE motion).
+"""Report 2 — Pipeline Execution (full pipeline motion, by owner).
 
-Weekly AE assignment (entered S1), S0->S1->S2->S3 progression funnel, median
-velocity per stage, and the distribution-free getting-faster/slower test.
+EVENT-DATED: any deal that moved in the post-S0 pipeline during Q2 contributes
+its Q2-week stage events (including deals created before Q2 still being worked).
+Attributed to the deal's current owner; includes EVERY owner of an S1+ deal.
+
+Three objectives, each poolable by owner + Execution groups:
+  1. Entered-stage weekly counts (S1..Lost)
+  2. Stage velocity days per transition (S1->S2 .. S5->Won), median AND mean
+  3. Funnel conversion per gate: reached N+1-or-beyond / (reached + lost-at-N)
+Plus the open-pipeline aging snapshot.
 """
-from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from collections import Counter, defaultdict
+from datetime import datetime
+from typing import Any, Dict, List, Tuple
 
 import aiosqlite
 
 from .. import db
-from .common import OTHER, load_deal_views, load_role_sets, owner_display
-from .stats import describe, trend
+from .common import (DealView, disambiguate_first_names, load_deal_views,
+                     load_person_names, load_role_sets, normalize_groups,
+                     owner_display, partial_week, person_meta, pool_components,
+                     pool_value_lists, sum_lists)
+from .series import (fit_line, pooled_count_series, pooled_mean_series,
+                     pooled_median_series, pooled_rate_series)
+from .stats import describe
 from .windows import (days_between, iso_week_key, iso_weeks_in_range, now_utc,
-                      quarter_start_dt, week_end_date, week_label, week_start_date)
+                      quarter_end_dt, quarter_start_dt, week_label)
+
+Week = Tuple[int, int]
+UNASSIGNED = "unassigned"
 
 STAGE_SHORTS = {0: "S0", 1: "S1", 2: "S2", 3: "S3", 4: "S4", 5: "S5", 6: "WON", 7: "LOST"}
+ENTERED_STAGES = [1, 2, 3, 4, 5, 6, 7]                    # Obj 1 (S1..Lost)
+TRANSITIONS = [(1, 2), (2, 3), (3, 4), (4, 5), (5, 6)]    # Obj 2
+GATES = [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6)]  # Obj 3 (S0->S1 incl. for the product)
+S1_PLUS = (1, 2, 3, 4, 5, 6, 7)
 
 
-async def execution_report(conn: aiosqlite.Connection) -> Dict[str, Any]:
-    s = await db.get_all_settings(conn)
-    roles = await load_role_sets(conn)
-    views = await load_deal_views(conn)
-    now = now_utc()
-    qstart = quarter_start_dt()
-    s1s3_target = int(s.get("s1_to_s3_target_days", 20))
-    s0s1_target = int(s.get("s0_to_s1_target_days", 14))
+def owner_key(v: DealView) -> str:
+    return v.owner_id or UNASSIGNED
 
-    weeks = iso_weeks_in_range(qstart, now)
-    week_index = {wk: i for i, wk in enumerate(weeks)}
 
-    def ae_attr(oid):
-        return oid if oid in roles.ae else OTHER
+def _in(t, qstart, qend) -> bool:
+    return t is not None and qstart <= t <= qend
 
-    # --- weekly AE assignment (entered S1, closure-aware) ------------------
-    assign_total = defaultdict(int)
-    assign_by_ae: Dict[Any, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    ae_keys = set()
-    prog = {o: defaultdict(int) for o in (0, 1, 2, 3)}
-    s0s1_points: List[tuple] = []
-    s1s3_points: List[tuple] = []
-    s1s3_by_ae: Dict[str, List[tuple]] = defaultdict(list)
-    s0s1_durations: List[float] = []
-    s1s3_durations: List[float] = []
 
-    for v in views.values():
-        a1 = v.first_reach(1)
-        if a1 is not None and a1 >= qstart:
-            wk = iso_week_key(a1)
-            key = ae_attr(v.owner_id)
-            ae_keys.add(key)
-            assign_total[wk] += 1
-            assign_by_ae[wk][key] += 1
+# --------------------------------------------------------------------------- #
+# Objective 1 — entered-stage weekly counts (mirrors prepipeline.compute_created)
+# --------------------------------------------------------------------------- #
+def compute_entered(deals: List[DealView], weeks: List[Week], stage_order: int,
+                    qstart: datetime, qend: datetime, now: datetime, groups=()) -> Dict[str, Any]:
+    wkset = set(weeks)
+    agg: Dict[Week, int] = {wk: 0 for wk in weeks}
+    by: Dict[str, Dict[Week, int]] = defaultdict(lambda: {wk: 0 for wk in weeks})
+    for v in deals:
+        t = v.entries.get(stage_order)          # ACTUAL entry into this stage (not closure)
+        if not _in(t, qstart, qend):            # event must fall inside the quarter
+            continue
+        wk = iso_week_key(t)
+        if wk not in wkset:
+            continue
+        agg[wk] += 1
+        by[owner_key(v)][wk] += 1
+    agg_list = [agg[wk] for wk in weeks]
+    by_lists = {pid: [d[wk] for wk in weeks] for pid, d in by.items()}
+    complete = [not partial_week(wk, qstart, now) for wk in weeks]
+    by_group = {g["id"]: sum_lists([by_lists.get(m) for m in g["member_ids"]], len(weeks))
+                for g in groups}
 
-        # progression funnel: forward stage entries within Q2
-        for o in (0, 1, 2, 3):
-            t = v.entries.get(o)
-            if t is not None and t >= qstart:
-                prog[o][iso_week_key(t)] += 1
+    def cseries(arr):
+        return {**pooled_count_series(arr, weeks, complete=complete), "fit": fit_line(arr, weeks, complete)}
 
-        # velocity legs (completed)
-        s0 = v.s0_at
-        if s0 is not None and a1 is not None and a1 >= qstart:
-            d = days_between(s0, a1)
-            if d is not None and d >= 0:
-                s0s1_durations.append(d)
-                s0s1_points.append((week_index.get(iso_week_key(s0), 0), d))
-        a3 = v.first_reach(3)
-        if a1 is not None and a3 is not None and a1 >= qstart:
-            d = days_between(a1, a3)
-            if d is not None and d >= 0:
-                s1s3_durations.append(d)
-                idx = week_index.get(iso_week_key(a1), 0)
-                s1s3_points.append((idx, d))
-                s1s3_by_ae[ae_attr(v.owner_id)].append((idx, d))
-
-    ae_keys = sorted(ae_keys, key=lambda k: (k == OTHER, k))
-    ae_labels = {k: ("Non-AE owner" if k == OTHER else owner_display(k, roles)) for k in ae_keys}
-
-    weekly_assign: List[Dict[str, Any]] = []
-    for wk in weeks:
-        partial = week_start_date(*wk) < qstart or week_end_date(*wk) > now
-        weekly_assign.append({
-            "week": week_label(*wk),
-            "total": assign_total.get(wk, 0),
-            "by_ae": {k: assign_by_ae.get(wk, {}).get(k, 0) for k in ae_keys},
-            "partial": partial,
-        })
-
-    funnel_weekly = [{
-        "week": week_label(*wk),
-        "s0": prog[0].get(wk, 0), "s1": prog[1].get(wk, 0),
-        "s2": prog[2].get(wk, 0), "s3": prog[3].get(wk, 0),
-    } for wk in weeks]
-
-    # cumulative funnel over the Q2 Stage-0 cohort (closure-aware)
-    cohort = [v for v in views.values() if v.s0_at is not None and v.s0_at >= qstart]
-    n0 = len(cohort)
-    cum = {
-        "s0": n0,
-        "s1": sum(v.ever_reached(1) for v in cohort),
-        "s2": sum(v.ever_reached(2) for v in cohort),
-        "s3": sum(v.ever_reached(3) for v in cohort),
-        "won": sum(v.won_at is not None for v in cohort),
-        "lost": sum(v.lost_at is not None for v in cohort),
-    }
-    funnel_cumulative = {
-        "counts": cum,
-        "conv_s0_s1": cum["s1"] / n0 if n0 else None,
-        "conv_s1_s2": cum["s2"] / cum["s1"] if cum["s1"] else None,
-        "conv_s2_s3": cum["s3"] / cum["s2"] if cum["s2"] else None,
+    return {
+        "aggregate": agg_list, "by_owner": by_lists, "by_group": by_group,
+        "series": {
+            "aggregate": cseries(agg_list),
+            "by_owner": {pid: cseries(a) for pid, a in by_lists.items()},
+            "by_group": {gid: cseries(a) for gid, a in by_group.items()},
+        },
     }
 
-    # completed time-in-stage per stage (Q2 entries, exited)
-    stage_dwell: Dict[str, Any] = {}
-    rows = await (await conn.execute(
-        """SELECT stage_order, dwell_seconds FROM deal_stage_events
-           WHERE exited_at IS NOT NULL AND entered_at >= ?""", (qstart.isoformat(),))).fetchall()
-    by_stage = defaultdict(list)
-    for r in rows:
-        by_stage[r["stage_order"]].append(r["dwell_seconds"] / 86400.0)
-    for o in range(0, 6):
-        stage_dwell[STAGE_SHORTS[o]] = describe(by_stage.get(o, []))
 
-    # velocity legs + trend
-    velocity = {
-        "s0_s1": describe(s0s1_durations),
-        "s1_s3": describe(s1s3_durations),
-        "s0_s1_target": s0s1_target,
-        "s1_s3_target": s1s3_target,
-    }
-    net_trend = trend(s1s3_points)
-    per_ae_trend = {
-        ae_labels[k]: trend(s1s3_by_ae[k]) for k in ae_keys if k in s1s3_by_ae
+# --------------------------------------------------------------------------- #
+# Objective 2 — stage velocity (days), median AND mean
+# --------------------------------------------------------------------------- #
+def _to_sum_n(vals_by_week, weeks):
+    return {wk: {"sum": float(sum(vals_by_week.get(wk) or [])),
+                 "n": len(vals_by_week.get(wk) or [])} for wk in weeks}
+
+
+def _both_stats(vals_by_week, weeks):
+    return {"median": pooled_median_series(vals_by_week, weeks),
+            "mean": pooled_mean_series(_to_sum_n(vals_by_week, weeks), weeks)}
+
+
+def compute_velocity(deals: List[DealView], weeks: List[Week], n: int,
+                     qstart: datetime, qend: datetime, groups=()) -> Dict[str, Any]:
+    """Transition n -> n+1: days = reach(n+1) - entry(n), bucketed by the week of
+    reach(n+1). Raw values kept per (owner, week) so both median and mean (each
+    Weekly/4-wk/Cumulative) are exact."""
+    wkset = set(weeks)
+    agg_vals: Dict[Week, List[float]] = defaultdict(list)
+    by: Dict[str, Dict[Week, List[float]]] = defaultdict(lambda: defaultdict(list))
+    for v in deals:
+        a = v.entries.get(n)
+        b = v.first_reach(n + 1)
+        if a is None or not _in(b, qstart, qend):   # the transition must land in Q2
+            continue
+        wk = iso_week_key(b)
+        if wk not in wkset:
+            continue
+        d = days_between(a, b)
+        if d is None or d < 0:
+            continue
+        agg_vals[wk].append(d)
+        by[owner_key(v)][wk].append(d)
+    by_group = {g["id"]: pool_value_lists(by, g["member_ids"], weeks) for g in groups}
+    return {
+        "aggregate": _both_stats(agg_vals, weeks),
+        "by_owner": {pid: _both_stats(vw, weeks) for pid, vw in by.items()},
+        "by_group": {gid: _both_stats(vw, weeks) for gid, vw in by_group.items()},
     }
 
-    # open aging snapshot
-    aging_by_stage = defaultdict(lambda: {"open": 0, "aging": 0, "ages": []})
-    aging_deals: List[Dict[str, Any]] = []
-    for v in views.values():
+
+# --------------------------------------------------------------------------- #
+# Objective 3 — funnel gate conversion (mirrors prepipeline.compute_conversion)
+# --------------------------------------------------------------------------- #
+def compute_gate(deals: List[DealView], weeks: List[Week], n: int,
+                 qstart: datetime, qend: datetime, groups=()) -> Dict[str, Any]:
+    """Gate n -> n+1, cohort by week of entry(n).
+    advanced = reach(n+1) (closure-aware, counts won); lost = lost AND not reach(n+1);
+    still-open-at-n excluded."""
+    wkset = set(weeks)
+    agg: Dict[Week, Dict[str, int]] = defaultdict(lambda: {"advanced": 0, "lost": 0})
+    by: Dict[str, Dict[Week, Dict[str, int]]] = defaultdict(
+        lambda: defaultdict(lambda: {"advanced": 0, "lost": 0}))
+    for v in deals:
+        a = v.entries.get(n)
+        if not _in(a, qstart, qend):                 # cohort by Q2 entry into stage n
+            continue
+        wk = iso_week_key(a)
+        if wk not in wkset:
+            continue
+        if v.first_reach(n + 1) is not None:
+            cls = "advanced"
+        elif v.lost_at is not None:
+            cls = "lost"
+        else:
+            continue
+        pid = owner_key(v)
+        agg[wk][cls] += 1
+        by[pid][wk][cls] += 1
+    by_group = {g["id"]: pool_components(by, g["member_ids"], weeks, ("advanced", "lost"))
+                for g in groups}
+    return {
+        "aggregate": pooled_rate_series(agg, weeks),
+        "by_owner": {pid: pooled_rate_series(c, weeks) for pid, c in by.items()},
+        "by_group": {gid: pooled_rate_series(comp, weeks) for gid, comp in by_group.items()},
+    }
+
+
+def funnel_summary(deals: List[DealView], qstart: datetime, qend: datetime) -> Dict[str, Any]:
+    """Per-gate QTD conversion over the Q2 cohort + the full-funnel product."""
+    gates: List[Dict[str, Any]] = []
+    product = 1.0
+    have_all = True
+    for (n, m) in GATES:
+        adv = lost = 0
+        for v in deals:
+            a = v.entries.get(n)
+            if not _in(a, qstart, qend):
+                continue
+            if v.first_reach(m) is not None:
+                adv += 1
+            elif v.lost_at is not None:
+                lost += 1
+        den = adv + lost
+        rate = (adv / den) if den else None
+        gates.append({"key": f"{STAGE_SHORTS[n]}_{STAGE_SHORTS[m]}",
+                      "label": f"{STAGE_SHORTS[n]}→{STAGE_SHORTS[m]}",
+                      "advanced": adv, "lost": lost, "denom": den, "rate": rate})
+        if rate is None:
+            have_all = False
+        else:
+            product *= rate
+    return {"gates": gates, "full_funnel": product if have_all else None}
+
+
+# --------------------------------------------------------------------------- #
+# Open-pipeline aging snapshot
+# --------------------------------------------------------------------------- #
+def _aging(deals: List[DealView], roles, s: Dict[str, Any], now: datetime) -> Dict[str, Any]:
+    s0t = int(s.get("s0_to_s1_target_days", 14))
+    s1s3t = int(s.get("s1_to_s3_target_days", 20))
+    by_stage = defaultdict(lambda: {"open": 0, "aging": 0, "ages": []})
+    rows: List[Dict[str, Any]] = []
+    for v in deals:
         if not v.is_open or v.current_order is None:
             continue
         entered = v.entries.get(v.current_order)
         age = days_between(entered, now) if entered else None
         short = STAGE_SHORTS.get(v.current_order, str(v.current_order))
-        target = s0s1_target if v.current_order == 0 else (s1s3_target if 1 <= v.current_order <= 3 else None)
-        is_aging = bool(target and age is not None and age > target)
-        slot = aging_by_stage[short]
+        target = s0t if v.current_order == 0 else (s1s3t if 1 <= v.current_order <= 3 else None)
+        slot = by_stage[short]
         slot["open"] += 1
         if age is not None:
             slot["ages"].append(age)
-        if is_aging:
+        if target and age is not None and age > target:
             slot["aging"] += 1
-            aging_deals.append({
-                "deal_id": v.deal_id, "dealname": v.dealname, "stage": short,
-                "owner": owner_display(v.owner_id, roles),
-                "age_days": round(age, 1) if age is not None else None,
-            })
-    aging_summary = {st: {"open": d["open"], "aging": d["aging"],
-                          "median_age": describe(d["ages"])["median"]}
-                     for st, d in aging_by_stage.items()}
+            rows.append({"deal_id": v.deal_id, "dealname": v.dealname, "stage": short,
+                         "owner": owner_display(v.owner_id, roles), "owner_id": v.owner_id,
+                         "age_days": round(age, 1)})
+    summary = {st: {"open": d["open"], "aging": d["aging"], "median_age": describe(d["ages"])["median"]}
+               for st, d in by_stage.items()}
+    return {"summary": summary, "deals": sorted(rows, key=lambda d: -(d["age_days"] or 0))}
+
+
+# --------------------------------------------------------------------------- #
+# Owner roster (anyone owning a deal with S1+ motion in Q2) + report
+# --------------------------------------------------------------------------- #
+def _owner_totals(deals: List[DealView], qstart: datetime, qend: datetime) -> Counter:
+    totals: Counter = Counter()
+    for v in deals:
+        if any(_in(v.entries.get(o), qstart, qend) for o in S1_PLUS):
+            totals[owner_key(v)] += 1
+    return totals
+
+
+async def list_owners(conn: aiosqlite.Connection) -> List[Dict[str, Any]]:
+    """S1+ owner list for the Execution-group editor."""
+    roles = await load_role_sets(conn)
+    names = await load_person_names(conn)
+    views = await load_deal_views(conn, roster_only=False)
+    qstart, qend = quarter_start_dt(), quarter_end_dt()
+    totals = _owner_totals(list(views.values()), qstart, qend)
+    owners = [person_meta(pid, n, names, roles) for pid, n in totals.items()]
+    owners.sort(key=lambda c: (-c["total_created"], c["name"]))
+    disambiguate_first_names(owners)
+    return owners
+
+
+async def execution_report(conn: aiosqlite.Connection) -> Dict[str, Any]:
+    s = await db.get_all_settings(conn)
+    roles = await load_role_sets(conn)
+    names = await load_person_names(conn)
+    views = await load_deal_views(conn, roster_only=False)
+    now = now_utc()
+    qstart, qend = quarter_start_dt(), quarter_end_dt()
+    weeks = iso_weeks_in_range(qstart, min(now, qend))
+    deals = list(views.values())
+
+    totals = _owner_totals(deals, qstart, qend)
+    owners = [person_meta(pid, n, names, roles) for pid, n in totals.items()]
+    owners.sort(key=lambda c: (-c["total_created"], c["name"]))
+    disambiguate_first_names(owners)
+    groups = normalize_groups(await db.get_setting(conn, "execution_groups", []), totals, owners)
+
+    entered = {STAGE_SHORTS[o]: compute_entered(deals, weeks, o, qstart, qend, now, groups)
+               for o in ENTERED_STAGES}
+    velocity = {f"{STAGE_SHORTS[n]}_{STAGE_SHORTS[m]}": compute_velocity(deals, weeks, n, qstart, qend, groups)
+                for (n, m) in TRANSITIONS}
+    conversion = {f"{STAGE_SHORTS[n]}_{STAGE_SHORTS[m]}": compute_gate(deals, weeks, n, qstart, qend, groups)
+                  for (n, m) in GATES}
 
     return {
-        "ae_keys": ae_keys,
-        "ae_labels": ae_labels,
-        "weekly_assign": weekly_assign,
-        "funnel_weekly": funnel_weekly,
-        "funnel_cumulative": funnel_cumulative,
-        "stage_dwell": stage_dwell,
+        "weeks": [week_label(*wk) for wk in weeks],
+        "owners": owners,
+        "groups": groups,
+        "entered_stages": [STAGE_SHORTS[o] for o in ENTERED_STAGES],
+        "transitions": [{"key": f"{STAGE_SHORTS[n]}_{STAGE_SHORTS[m]}",
+                         "label": f"{STAGE_SHORTS[n]}→{STAGE_SHORTS[m]}"} for (n, m) in TRANSITIONS],
+        "gates": [{"key": f"{STAGE_SHORTS[n]}_{STAGE_SHORTS[m]}",
+                   "label": f"{STAGE_SHORTS[n]}→{STAGE_SHORTS[m]}"} for (n, m) in GATES],
+        "entered": entered,
         "velocity": velocity,
-        "net_trend": net_trend,
-        "per_ae_trend": per_ae_trend,
-        "aging_summary": aging_summary,
-        "aging_deals": sorted(aging_deals, key=lambda d: -(d["age_days"] or 0)),
-        "totals": {"assignments": sum(assign_total.values()), "cohort": n0},
+        "conversion": conversion,
+        "funnel_summary": funnel_summary(deals, qstart, qend),
+        "aging": _aging(deals, roles, s, now),
+        "totals": {"owners": len(owners)},
     }

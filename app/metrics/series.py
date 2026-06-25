@@ -13,9 +13,36 @@ rolling rate is Σadvanced / Σ(advanced+lost), not the mean of four weekly rate
 """
 from typing import Dict, List, Optional, Tuple
 
-from .stats import median, theil_sen, trend
+from .stats import median, quantile, theil_sen, trend
 
 Week = Tuple[int, int]
+
+
+def pooled_median_series(values_by_week: Dict[Week, List[float]], weeks: List[Week],
+                         window: int = 4) -> Dict[str, List[Dict]]:
+    """Median-of-pooled-raw-values series. Medians CANNOT be pooled from
+    sub-medians, so each window concatenates the underlying values first, then
+    takes the median. Cell = {avg (=median), n, p25, p75} (key 'avg' so the
+    frontend renders mean & median cells identically)."""
+    weekly: List[Dict] = []
+    rolling: List[Dict] = []
+    cumulative: List[Dict] = []
+    cum: List[float] = []
+    for i, wk in enumerate(weeks):
+        wv = values_by_week.get(wk) or []
+        weekly.append(_median_cell(wv))
+        rv: List[float] = []
+        for j in range(max(0, i - window + 1), i + 1):
+            rv.extend(values_by_week.get(weeks[j]) or [])
+        rolling.append(_median_cell(rv))
+        cum.extend(wv)
+        cumulative.append(_median_cell(cum))
+    return {"weekly": weekly, "rolling4": rolling, "cumulative": cumulative}
+
+
+def _median_cell(vals: List[float]) -> Dict:
+    return {"avg": median(vals), "n": len(vals),
+            "p25": quantile(vals, 0.25), "p75": quantile(vals, 0.75)}
 
 
 def pooled_count_series(counts: List[int], weeks: List[Week], window: int = 4,

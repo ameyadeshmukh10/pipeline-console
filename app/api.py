@@ -87,9 +87,11 @@ async def get_settings() -> Dict[str, Any]:
                WHERE r.owner_id IS NULL AND d.owner_id IS NOT NULL AND d.owner_id <> ''
                GROUP BY d.owner_id ORDER BY n DESC""")).fetchall())
         from .metrics.prepipeline import list_creators
+        from .metrics.execution import list_owners
         creators = await list_creators(conn)
+        owners = await list_owners(conn)
         return {"values": values, "roster": roles, "off_roster_owners": off,
-                "creators": creators}
+                "creators": creators, "owners": owners}
     finally:
         await conn.close()
 

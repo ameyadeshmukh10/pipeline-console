@@ -2,18 +2,21 @@
 its stage-entry timestamps into memory (small dataset) so cohort/conversion/
 velocity math is plain Python with stage-order closure.
 """
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import aiosqlite
 
-from ..constants import AE_IDS, ROSTER_IDS, S0_ALLOWED_IDS, SDR_IDS
-from .windows import parse_ts
+from ..constants import AE_IDS, ROSTER_BY_ID, ROSTER_IDS, S0_ALLOWED_IDS, SDR_IDS
+from .windows import parse_ts, week_end_date, week_start_date
 
 OTHER = "other"          # bucket key for off-roster / unexpected owners
+UNKNOWN = "unknown"      # bucket key for a missing creator/owner id
 WON_ORDER = 6
 LOST_ORDER = 7
+Week = Tuple[int, int]
 
 
 @dataclass
@@ -145,3 +148,121 @@ def owner_display(owner_id: Optional[str], roles: "RoleSets") -> str:
     if not owner_id:
         return "Unassigned"
     return roles.names.get(owner_id) or f"Other ({owner_id})"
+
+
+# --------------------------------------------------------------------------- #
+# Shared people + group + pooling helpers (used by Pre-Pipeline AND Execution).
+# Person id = creator id (Pre-Pipeline) or owner id (Execution). `total_created`
+# is the in-scope count (deals created / owned) — kept under that key so the
+# existing frontend bindings don't change.
+# --------------------------------------------------------------------------- #
+def partial_week(wk: Week, qstart: datetime, now: datetime) -> bool:
+    return week_start_date(*wk) < qstart or week_end_date(*wk) > now
+
+
+def sum_lists(arrs, n: int) -> List[int]:
+    out = [0] * n
+    for arr in arrs:
+        if not arr:
+            continue
+        for i in range(min(n, len(arr))):
+            out[i] += arr[i] or 0
+    return out
+
+
+def pool_components(by, member_ids, weeks, fields):
+    """Sum the per-person weekly component dicts for a group's members."""
+    out = {wk: {f: 0 for f in fields} for wk in weeks}
+    for pid in member_ids:
+        pdict = by.get(pid)
+        if not pdict:
+            continue
+        for wk, comp in pdict.items():
+            if wk not in out:
+                continue
+            for f in fields:
+                out[wk][f] += comp.get(f, 0)
+    return out
+
+
+def pool_value_lists(by, member_ids, weeks):
+    """Concatenate the per-person weekly value-lists for a group's members
+    (used by median velocity, where values can't be summed)."""
+    out = {wk: [] for wk in weeks}
+    for pid in member_ids:
+        pdict = by.get(pid)
+        if not pdict:
+            continue
+        for wk, vals in pdict.items():
+            if wk in out:
+                out[wk].extend(vals)
+    return out
+
+
+async def load_person_names(conn: aiosqlite.Connection) -> Dict[str, Dict[str, Any]]:
+    rows = await (await conn.execute(
+        "SELECT owner_id, first_name, last_name, archived FROM owners")).fetchall()
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        first = (r["first_name"] or "").strip()
+        last = (r["last_name"] or "").strip()
+        out[r["owner_id"]] = {
+            "first": first, "last": last,
+            "full": (first + " " + last).strip(),
+            "archived": bool(r["archived"]),
+        }
+    return out
+
+
+def person_meta(pid: str, total: int, names: Dict[str, Dict[str, Any]],
+                roles: "RoleSets") -> Dict[str, Any]:
+    if pid == UNKNOWN:
+        return {"id": None, "first_name": "Unknown", "name": "Unknown", "last": "",
+                "in_roster": False, "role": "", "archived": False, "total_created": total}
+    nm = names.get(pid)
+    if nm and nm["full"]:
+        first, last, full, archived = nm["first"] or nm["full"], nm["last"], nm["full"], nm["archived"]
+    elif pid in roles.names:
+        full = roles.names[pid]
+        first, last, archived = full.split()[0], "", False
+    elif pid in ROSTER_BY_ID:
+        full = ROSTER_BY_ID[pid]["display_name"]
+        first, last, archived = full.split()[0], "", False
+    else:
+        first = last = full = f"Other ({pid})"
+        archived = False
+    role = ("SDR" if pid in roles.sdr else "AE" if pid in roles.ae
+            else "SE" if pid in roles.se else "never" if pid in roles.never_owns else "")
+    return {"id": pid, "first_name": first, "name": full, "last": last,
+            "in_roster": pid in roles.roster, "role": role,
+            "archived": archived, "total_created": total}
+
+
+def disambiguate_first_names(people: List[Dict[str, Any]]) -> None:
+    counts = Counter(p["first_name"] for p in people)
+    for p in people:
+        if counts[p["first_name"]] > 1 and p.get("last"):
+            p["first_name"] = f"{p['first_name']} {p['last'][0]}."
+
+
+def normalize_groups(raw, totals, people):
+    """Validate a settings groups list + resolve member names/totals."""
+    first_by_id = {p["id"]: p["first_name"] for p in people if p["id"]}
+    full_by_id = {p["id"]: p["name"] for p in people if p["id"]}
+    out = []
+    seen = set()
+    for g in raw or []:
+        if not isinstance(g, dict):
+            continue
+        gid = str(g.get("id") or g.get("name") or "").strip()
+        name = str(g.get("name") or gid).strip()
+        members = [str(m) for m in (g.get("member_ids") or []) if m]
+        if not gid or gid in seen or not members:
+            continue
+        seen.add(gid)
+        out.append({
+            "id": gid, "name": name, "member_ids": members,
+            "member_names": [full_by_id.get(m) or first_by_id.get(m) or f"Other ({m})" for m in members],
+            "total_created": sum(totals.get(m, 0) for m in members),
+        })
+    return out

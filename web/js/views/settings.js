@@ -13,7 +13,9 @@ export async function render(el, ctx) {
   const d = await api.settings();
   const v = d.values;
   const creators = d.creators || [];
-  let groups = [...(v.creator_groups || [])];
+  const owners = d.owners || [];
+  const creatorGroups = [...(v.creator_groups || [])];
+  const execGroups = [...(v.execution_groups || [])];
   const probs = v.stage_probabilities || {};
   const aeT = v.ae_targets || {};
   const openStages = meta.stages.filter((s) => s.is_open || s.is_won);
@@ -50,15 +52,9 @@ export async function render(el, ctx) {
       ${d.off_roster_owners.length ? `<div class="muted small" style="margin-top:10px">Off-roster owners on deals (bucketed Other/Unknown): ${d.off_roster_owners.map((o) => `${o.owner_id} (${o.n})`).join(", ")}</div>` : ""}
     </div>
 
-    <div class="panel"><h3>Creator Groups <span class="panel-sub">pool deal creators to assess together on Pre-Pipeline</span></h3>
-      <div id="grp-list"></div>
-      <div class="grp-new">
-        <input id="grp-name" type="text" placeholder="Group name (e.g. Current SDRs)" class="grp-name-input"/>
-        <div class="grp-members" id="grp-members">
-          ${creators.map((c) => `<label class="grp-mem"><input type="checkbox" value="${esc(c.id || "unknown")}"/> ${esc(c.first_name)} <span class="muted small">${esc(c.name)}</span></label>`).join("")}
-        </div>
-        <button id="grp-add" class="btn-ghost">+ Add group</button>
-      </div>
+    <div class="cols-2">
+      ${groupPanel("cg", "Creator Groups", "pool deal creators — used on Pre-Pipeline", "Group name (e.g. Current SDRs)", creators)}
+      ${groupPanel("eg", "Execution Groups", "pool deal owners — used on Execution", "Group name (e.g. Current AEs)", owners)}
     </div>
 
     <div style="margin-top:16px;display:flex;gap:12px;align-items:center">
@@ -66,29 +62,8 @@ export async function render(el, ctx) {
       <span id="set-msg" class="muted small"></span>
     </div>`;
 
-  const nameById = {};
-  creators.forEach((c) => { nameById[c.id || "unknown"] = c.first_name; });
-  function renderGroups() {
-    const box = el.querySelector("#grp-list");
-    if (!groups.length) { box.innerHTML = `<div class="muted small">No groups yet — name one and pick its creators below.</div>`; return; }
-    box.innerHTML = groups.map((g, i) => `<div class="grp-item">
-        <strong>▣ ${esc(g.name)}</strong>
-        <span class="muted small">${(g.member_ids || []).map((m) => esc(nameById[m] || m)).join(", ")}</span>
-        <button data-i="${i}" class="grp-del">Remove</button></div>`).join("");
-    box.querySelectorAll(".grp-del").forEach((b) => { b.onclick = () => { groups.splice(+b.dataset.i, 1); renderGroups(); }; });
-  }
-  renderGroups();
-  el.querySelector("#grp-add").onclick = () => {
-    const name = el.querySelector("#grp-name").value.trim();
-    const members = [...el.querySelectorAll("#grp-members input:checked")].map((i) => i.value);
-    if (!name || !members.length) return;
-    let id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || ("g" + groups.length);
-    while (groups.some((g) => g.id === id)) id += "-" + groups.length;
-    groups.push({ id, name, member_ids: members });
-    el.querySelector("#grp-name").value = "";
-    el.querySelectorAll("#grp-members input:checked").forEach((i) => { i.checked = false; });
-    renderGroups();
-  };
+  groupEditor(el, "cg", creators, creatorGroups);
+  groupEditor(el, "eg", owners, execGroups);
 
   el.querySelector("#set-save").onclick = async () => {
     const values = {};
@@ -100,7 +75,8 @@ export async function render(el, ctx) {
     const at = {};
     el.querySelectorAll("[data-aet]").forEach((i) => { if (i.value !== "") at[i.dataset.aet] = +i.value; });
     values.ae_targets = at;
-    values.creator_groups = groups;
+    values.creator_groups = creatorGroups;
+    values.execution_groups = execGroups;
     const msg = el.querySelector("#set-msg");
     msg.textContent = "Saving…";
     try { await api.putSettings(values); msg.textContent = "Saved. Metrics use the new settings on next view load."; }
@@ -110,4 +86,41 @@ export async function render(el, ctx) {
 
 function numField(key, label, val) {
   return `<label class="field">${label}<input data-set="${key}" type="number" value="${val ?? ""}"/></label>`;
+}
+
+function groupPanel(prefix, title, sub, placeholder, people) {
+  return `<div class="panel"><h3>${title} <span class="panel-sub">${sub}</span></h3>
+    <div id="${prefix}-list"></div>
+    <div class="grp-new">
+      <input id="${prefix}-name" type="text" placeholder="${placeholder}" class="grp-name-input"/>
+      <div class="grp-members" id="${prefix}-members">
+        ${people.map((c) => `<label class="grp-mem"><input type="checkbox" value="${esc(c.id || "unknown")}"/> ${esc(c.first_name)} <span class="muted small">${esc(c.name)}</span></label>`).join("")}
+      </div>
+      <button id="${prefix}-add" class="btn-ghost">+ Add group</button>
+    </div></div>`;
+}
+
+function groupEditor(el, prefix, people, groups) {
+  const nameById = {};
+  people.forEach((c) => { nameById[c.id || "unknown"] = c.first_name; });
+  function draw() {
+    const box = el.querySelector(`#${prefix}-list`);
+    if (!groups.length) { box.innerHTML = `<div class="muted small">No groups yet — name one and pick its members below.</div>`; return; }
+    box.innerHTML = groups.map((g, i) => `<div class="grp-item"><strong>▣ ${esc(g.name)}</strong>
+        <span class="muted small">${(g.member_ids || []).map((m) => esc(nameById[m] || m)).join(", ")}</span>
+        <button data-i="${i}" class="grp-del">Remove</button></div>`).join("");
+    box.querySelectorAll(".grp-del").forEach((b) => { b.onclick = () => { groups.splice(+b.dataset.i, 1); draw(); }; });
+  }
+  draw();
+  el.querySelector(`#${prefix}-add`).onclick = () => {
+    const name = el.querySelector(`#${prefix}-name`).value.trim();
+    const members = [...el.querySelectorAll(`#${prefix}-members input:checked`)].map((i) => i.value);
+    if (!name || !members.length) return;
+    let id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || ("g" + groups.length);
+    while (groups.some((g) => g.id === id)) id += "-" + groups.length;
+    groups.push({ id, name, member_ids: members });
+    el.querySelector(`#${prefix}-name`).value = "";
+    el.querySelectorAll(`#${prefix}-members input:checked`).forEach((i) => { i.checked = false; });
+    draw();
+  };
 }

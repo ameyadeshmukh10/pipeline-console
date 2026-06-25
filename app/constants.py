@@ -129,4 +129,5 @@ DEFAULT_SETTINGS: Dict[str, object] = {
     "org_target": 0,
     "timezone": "America/New_York",
     "creator_groups": [],              # [{id, name, member_ids:[creator_id...]}]
+    "execution_groups": [],            # [{id, name, member_ids:[owner_id...]}]
 }
