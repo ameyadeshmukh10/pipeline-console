@@ -29,6 +29,9 @@ class Settings:
     # attached later with no code change; default keeps local/ephemeral behavior).
     DATA_DIR: Path = Path(os.getenv("DATA_DIR", str(ROOT / "data")))
     DB_PATH: str = os.getenv("DB_PATH", str(DATA_DIR / "pipeline.db"))
+    # Append-only weekly metric history — kept in its OWN file (separate from the
+    # rebuilt-every-sync mirror) so it's safe to put on a persistent volume.
+    HISTORY_DB_PATH: str = os.getenv("HISTORY_DB_PATH", str(DATA_DIR / "history.db"))
     WEB_DIR: Path = ROOT / "web"
 
     @property

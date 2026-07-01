@@ -22,6 +22,33 @@ async def health() -> Dict[str, Any]:
     return {"status": "ok"}
 
 
+@router.post("/history/snapshot")
+async def post_history_snapshot(sync: bool = True) -> Dict[str, Any]:
+    """Manually write a metric-history snapshot for the last completed ISO week.
+    `sync=false` snapshots the current mirror without re-pulling HubSpot first."""
+    from .history import write_snapshot
+    return await write_snapshot(sync_first=sync, reason="manual")
+
+
+@router.get("/history")
+async def get_history(format: str = "json", metric: str = "funnel"):
+    """The accumulated weekly history. `?format=csv&metric=velocity|funnel` exports."""
+    from .history import read_history
+    data = await read_history()
+    if format == "csv":
+        import csv
+        import io
+        rows = data.get(metric, [])
+        buf = io.StringIO()
+        if rows:
+            writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(buf.getvalue(), media_type="text/csv")
+    return data
+
+
 @router.post("/sync")
 async def trigger_sync() -> Dict[str, Any]:
     """Kick off a manual sync in the background. 409 if one is already running."""

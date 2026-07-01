@@ -99,3 +99,33 @@ replica; `.python-version` pins Python 3.12; `requirements.txt` is pinned + incl
 - **Keep a single replica.** Sync state is in-process and the DB is one SQLite file, so do not
   scale to multiple replicas/instances (`numReplicas` is pinned to 1 in `railway.json`).
 - Pushing to `main` triggers an automatic redeploy.
+
+## Weekly metric history (persistent volume)
+
+The console can accumulate a **weekly time-series of its aggregate measures** so you
+can see how they trend across (and within) quarters — the two things a live view
+can't remember:
+
+- **S1→S3 velocity** — median/mean + `n` for Full Quarter / First / Second / Last Third.
+- **Funnel gate conversion** — rate + advanced/lost/denom (`n`) for S0→S1 … S5→Won.
+
+Each ISO week (Mon–Sun, business tz — identical to every weekly report) is closed
+out just after it ends (**Monday 06:00 ET by default**, editable in Settings). The
+job re-syncs from HubSpot and appends one row per gate/period, **reusing the exact
+Execution functions** so the history always equals the UI. It's idempotent (one
+row per week) and self-healing across restarts.
+
+**Storage** is a dedicated append-only **`history.db`**, kept separate from the
+rebuilt-every-sync mirror so it's safe to persist:
+
+1. In Railway, **add a Volume** to the service and set its **mount path to `/data`**.
+   (A volume attaches to exactly one service — which is why the snapshot writer
+   runs *inside* the web service, not a separate cron job.)
+2. Set env **`DATA_DIR=/data`**. History then lives at `/data/history.db`
+   (override with `HISTORY_DB_PATH` if you want it elsewhere). Setting `DATA_DIR=/data`
+   also persists the mirror + your Settings/groups on the same volume.
+
+**Endpoints**: `POST /api/history/snapshot` (manual run; `?sync=false` to skip the
+HubSpot re-sync) and `GET /api/history` (JSON, or `?format=csv&metric=velocity|funnel`
+to export). Settings keys: `snapshot_enabled`, `snapshot_weekday` (0=Mon…6=Sun),
+`snapshot_hour`.

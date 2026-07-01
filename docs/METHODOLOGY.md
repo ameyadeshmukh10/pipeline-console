@@ -440,13 +440,16 @@ the same robust Theil-Sen/Mann-Kendall machinery.
 
 ## 9. Deferred / future work
 
-> **⏳ Persist Settings (incl. creator groups) across Railway deploys.**
-> Creator groups, cadence/probability/target settings, and the whole synced
-> mirror live in the SQLite DB, which is **ephemeral** on Railway — they reset on
-> every deploy/restart. To make groups (and all settings) stick, attach a Railway
-> **Volume** mounted at `/data` and set `DATA_DIR=/data`. The code already
-> supports this via the `DATA_DIR`/`DB_PATH` env override (`app/config.py`) — **no
-> code change needed**, just the volume + env var. Revisit when ready.
+> **✅ Persistent volume — implemented.** A Railway **Volume** mounted at `/data`
+> with `DATA_DIR=/data` now persists the mirror + all Settings/groups. On top of
+> that, a dedicated append-only **`history.db`** (`app/history.py`) accumulates a
+> **weekly time-series** of the two aggregates a live view can't remember —
+> S1→S3 velocity (median/mean/n, full quarter + thirds) and funnel gate conversion
+> (rate + advanced/lost/denom). An in-process scheduler (`app/scheduler.py`) closes
+> out each ISO week (Mon 06:00 ET default, editable) by re-syncing then snapshotting,
+> **reusing `velocity_s1_s3_periods` + `funnel_summary` verbatim** so the history
+> equals the UI. Idempotent (one row/ISO week), self-healing, `POST /api/history/snapshot`
+> + `GET /api/history` (JSON/CSV). See the README "Weekly metric history" section.
 
 Other known follow-ups:
 - Group lines on the Speed/Conversion *charts* (today groups appear there as

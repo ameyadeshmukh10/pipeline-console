@@ -130,4 +130,8 @@ DEFAULT_SETTINGS: Dict[str, object] = {
     "timezone": "America/New_York",
     "creator_groups": [],              # [{id, name, member_ids:[creator_id...]}]
     "execution_groups": [],            # [{id, name, member_ids:[owner_id...]}]
+    # Weekly metric-history snapshot (closes out each ISO week just after it ends)
+    "snapshot_enabled": True,
+    "snapshot_weekday": 0,             # 0=Mon .. 6=Sun (business tz); default Monday
+    "snapshot_hour": 6,                # hour in business tz; default 06:00
 }
