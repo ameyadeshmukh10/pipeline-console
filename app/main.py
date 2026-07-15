@@ -24,6 +24,18 @@ async def _startup() -> None:
     asyncio.create_task(snapshot_scheduler())
 
 
+class RevalidatedStatics(StaticFiles):
+    """StaticFiles that forbids stale caching. Without Cache-Control, browsers
+    heuristically cache the SPA's JS modules for hours after a deploy (new
+    index.html + old settings.js = missing panels until a hard refresh).
+    `no-cache` = cache but ALWAYS revalidate: unchanged files still 304, but a
+    fresh deploy shows up on a normal reload."""
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 # Serve the SPA at "/". Registered last so /api/* routes win.
 settings.WEB_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/", StaticFiles(directory=str(settings.WEB_DIR), html=True), name="web")
+app.mount("/", RevalidatedStatics(directory=str(settings.WEB_DIR), html=True), name="web")
