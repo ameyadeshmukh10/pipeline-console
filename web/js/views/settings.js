@@ -2,6 +2,7 @@ import { api } from "../api.js";
 import { fmt, esc, info } from "../util.js";
 
 const TIP = {
+  window: "The application-wide analysis window. Every report — Pre-Pipeline, Execution, Forecast, Cohorts, Flags — only counts deals and stage events inside it. Continuous = no end date: the window follows today.",
   probsrc: "Where each deal's win-probability comes from. House = your editable per-stage map below; HubSpot = the deal's own hs_deal_stage_probability; Blend = the average of the two.",
   probmap: "Win-probability assigned to a deal based on its current stage. Used to compute each deal's weighted amount (amount × probability) and the Most-likely forecast.",
   aeTargets: "Each AE's quarter quota in $. Drives coverage (open pipeline ÷ target) and gap-to-target on the Forecast tab.",
@@ -22,6 +23,17 @@ export async function render(el, ctx) {
   const targets = (await api.forecastTargets()).targets;
 
   el.innerHTML = `
+    <div class="panel"><h3>Analysis Window ${info(TIP.window)}<span class="panel-sub"> applies to every report</span></h3>
+      <div class="win-row">
+        <label class="field">Start date
+          <input id="set-win-start" type="date" value="${esc(v.window_start || "")}"/></label>
+        <label class="field">End date
+          <input id="set-win-end" type="date" value="${esc(v.window_end || "")}" ${v.window_continuous ? "disabled" : ""}/></label>
+        <label class="win-cont"><input id="set-win-cont" type="checkbox" ${v.window_continuous ? "checked" : ""}/> Continuous — no end date</label>
+      </div>
+      <div class="muted small" style="margin-top:8px">Reports only count deals &amp; stage events between these dates. With Continuous checked the window stays open-ended and follows today.</div>
+    </div>
+
     <div class="cols-2">
       <div class="panel"><h3>Cadence Targets ${info(TIP.cadence)}<span class="panel-sub"> days</span></h3>
         <div class="metric-grid">
@@ -65,8 +77,21 @@ export async function render(el, ctx) {
   groupEditor(el, "cg", creators, creatorGroups);
   groupEditor(el, "eg", owners, execGroups);
 
+  const winStart = el.querySelector("#set-win-start");
+  const winEnd = el.querySelector("#set-win-end");
+  const winCont = el.querySelector("#set-win-cont");
+  winCont.onchange = () => { winEnd.disabled = winCont.checked; };
+
   el.querySelector("#set-save").onclick = async () => {
-    const values = {};
+    const msg = el.querySelector("#set-msg");
+    if (!winStart.value) { msg.textContent = "Analysis window: a start date is required."; return; }
+    if (!winCont.checked && !winEnd.value) { msg.textContent = "Analysis window: set an end date or check Continuous."; return; }
+    if (!winCont.checked && winEnd.value < winStart.value) { msg.textContent = "Analysis window: end date must be on or after the start date."; return; }
+    const values = {
+      window_start: winStart.value,
+      window_end: winEnd.value || null,   // kept while Continuous so untoggling restores it
+      window_continuous: winCont.checked,
+    };
     el.querySelectorAll("[data-set]").forEach((i) => { if (i.value !== "") values[i.dataset.set] = +i.value; });
     const sp = { ...probs };
     el.querySelectorAll("[data-prob]").forEach((i) => { if (i.value !== "") sp[i.dataset.prob] = +i.value; });
@@ -77,10 +102,12 @@ export async function render(el, ctx) {
     values.ae_targets = at;
     values.creator_groups = creatorGroups;
     values.execution_groups = execGroups;
-    const msg = el.querySelector("#set-msg");
     msg.textContent = "Saving…";
-    try { await api.putSettings(values); msg.textContent = "Saved. Metrics use the new settings on next view load."; }
-    catch (e) { msg.textContent = "Error: " + e.message; }
+    try {
+      await api.putSettings(values);
+      msg.textContent = "Saved. Metrics use the new settings on next view load.";
+      if (ctx.refreshMeta) ctx.refreshMeta();  // sidebar window label
+    } catch (e) { msg.textContent = "Error: " + e.message; }
   };
 }
 

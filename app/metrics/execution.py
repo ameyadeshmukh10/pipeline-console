@@ -1,7 +1,8 @@
 """Report 2 — Pipeline Execution (full pipeline motion, by owner).
 
-EVENT-DATED: any deal that moved in the post-S0 pipeline during Q2 contributes
-its Q2-week stage events (including deals created before Q2 still being worked).
+EVENT-DATED: any deal that moved in the post-S0 pipeline during the analysis
+window contributes its in-window weekly stage events (including deals created
+before the window still being worked).
 Attributed to the deal's current owner; includes EVERY owner of an S1+ deal.
 
 Three objectives, each poolable by owner + Execution groups:
@@ -25,7 +26,7 @@ from .series import (fit_line, pooled_count_series, pooled_mean_series,
                      pooled_median_series, pooled_rate_series)
 from .stats import describe, median
 from .windows import (days_between, iso_week_key, iso_weeks_in_range, now_utc,
-                      quarter_end_dt, quarter_start_dt, week_label)
+                      week_label, window_end_dt, window_start_dt)
 
 Week = Tuple[int, int]
 UNASSIGNED = "unassigned"
@@ -55,7 +56,7 @@ def compute_entered(deals: List[DealView], weeks: List[Week], stage_order: int,
     by: Dict[str, Dict[Week, int]] = defaultdict(lambda: {wk: 0 for wk in weeks})
     for v in deals:
         t = v.entries.get(stage_order)          # ACTUAL entry into this stage (not closure)
-        if not _in(t, qstart, qend):            # event must fall inside the quarter
+        if not _in(t, qstart, qend):            # event must fall inside the window
             continue
         wk = iso_week_key(t)
         if wk not in wkset:
@@ -105,7 +106,7 @@ def compute_velocity(deals: List[DealView], weeks: List[Week], n: int,
     for v in deals:
         a = v.entries.get(n)
         b = v.first_reach(n + 1)
-        if a is None or not _in(b, qstart, qend):   # the transition must land in Q2
+        if a is None or not _in(b, qstart, qend):   # the transition must land in-window
             continue
         wk = iso_week_key(b)
         if wk not in wkset:
@@ -137,7 +138,7 @@ def compute_gate(deals: List[DealView], weeks: List[Week], n: int,
         lambda: defaultdict(lambda: {"advanced": 0, "lost": 0}))
     for v in deals:
         a = v.entries.get(n)
-        if not _in(a, qstart, qend):                 # cohort by Q2 entry into stage n
+        if not _in(a, qstart, qend):                 # cohort by in-window entry into stage n
             continue
         wk = iso_week_key(a)
         if wk not in wkset:
@@ -165,8 +166,9 @@ def _stat_pair(vals: List[float]) -> Dict[str, Any]:
 
 
 def velocity_s1_s3_periods(deals: List[DealView], qstart: datetime, qend: datetime) -> Dict[str, Any]:
-    """S1->S3 days (entry S1 -> reach S3), split into thirds of the quarter by the
-    week the deal REACHED S3 — so you can see velocity drift across the quarter."""
+    """S1->S3 days (entry S1 -> reach S3), split into thirds of the window by the
+    week the deal REACHED S3 — so you can see velocity drift across the window.
+    (For a continuous window qend is 'now', so thirds cover the window so far.)"""
     total = (qend - qstart).total_seconds() or 1.0
     third_keys = ["first_third", "second_third", "last_third"]
     buckets: Dict[str, List[float]] = {"full": [], "first_third": [], "second_third": [], "last_third": []}
@@ -185,7 +187,7 @@ def velocity_s1_s3_periods(deals: List[DealView], qstart: datetime, qend: dateti
 
 
 def funnel_summary(deals: List[DealView], qstart: datetime, qend: datetime) -> Dict[str, Any]:
-    """Per-gate QTD conversion over the Q2 cohort + the full-funnel product."""
+    """Per-gate cumulative conversion over the window cohort + the full-funnel product."""
     gates: List[Dict[str, Any]] = []
     product = 1.0
     have_all = True
@@ -241,7 +243,7 @@ def _aging(deals: List[DealView], roles, s: Dict[str, Any], now: datetime) -> Di
 
 
 # --------------------------------------------------------------------------- #
-# Owner roster (anyone owning a deal with S1+ motion in Q2) + report
+# Owner roster (anyone owning a deal with S1+ motion in the window) + report
 # --------------------------------------------------------------------------- #
 def _owner_totals(deals: List[DealView], qstart: datetime, qend: datetime) -> Counter:
     totals: Counter = Counter()
@@ -256,7 +258,7 @@ async def list_owners(conn: aiosqlite.Connection) -> List[Dict[str, Any]]:
     roles = await load_role_sets(conn)
     names = await load_person_names(conn)
     views = await load_deal_views(conn, roster_only=False)
-    qstart, qend = quarter_start_dt(), quarter_end_dt()
+    qstart, qend = window_start_dt(), window_end_dt()
     totals = _owner_totals(list(views.values()), qstart, qend)
     owners = [person_meta(pid, n, names, roles) for pid, n in totals.items()]
     owners.sort(key=lambda c: (-c["total_created"], c["name"]))
@@ -270,8 +272,9 @@ async def execution_report(conn: aiosqlite.Connection) -> Dict[str, Any]:
     names = await load_person_names(conn)
     views = await load_deal_views(conn, roster_only=False)
     now = now_utc()
-    qstart, qend = quarter_start_dt(), quarter_end_dt()
-    weeks = iso_weeks_in_range(qstart, min(now, qend))
+    qstart, qend = window_start_dt(), window_end_dt()
+    end_obs = min(now, qend)  # observable end of the window
+    weeks = iso_weeks_in_range(qstart, end_obs)
     deals = list(views.values())
 
     totals = _owner_totals(deals, qstart, qend)
@@ -280,7 +283,7 @@ async def execution_report(conn: aiosqlite.Connection) -> Dict[str, Any]:
     disambiguate_first_names(owners)
     groups = normalize_groups(await db.get_setting(conn, "execution_groups", []), totals, owners)
 
-    entered = {STAGE_SHORTS[o]: compute_entered(deals, weeks, o, qstart, qend, now, groups)
+    entered = {STAGE_SHORTS[o]: compute_entered(deals, weeks, o, qstart, qend, end_obs, groups)
                for o in ENTERED_STAGES}
     velocity = {f"{STAGE_SHORTS[n]}_{STAGE_SHORTS[m]}": compute_velocity(deals, weeks, n, qstart, qend, groups)
                 for (n, m) in TRANSITIONS}
@@ -288,7 +291,7 @@ async def execution_report(conn: aiosqlite.Connection) -> Dict[str, Any]:
                   for (n, m) in GATES}
 
     # Fitted trend line for the aggregate velocity (per stat) + conversion lines.
-    complete = [not partial_week(wk, qstart, now) for wk in weeks]
+    complete = [not partial_week(wk, qstart, end_obs) for wk in weeks]
     for V in velocity.values():
         for stat in ("median", "mean"):
             V["aggregate"][stat]["fit"] = fit_line([c["avg"] for c in V["aggregate"][stat]["weekly"]], weeks, complete)

@@ -11,6 +11,11 @@ export const fmt = {
   num(v) { return v == null ? "—" : v; },
   days(v) { return v == null ? "—" : (+v).toFixed(1) + "d"; },
   date(s) { return s ? new Date(s).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"; },
+  dateISO(s) { // YYYY-MM-DD, parsed as local so it never shifts a day
+    if (!s) return "—";
+    const [y, m, d] = s.split("-").map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  },
   datetime(s) { return s ? new Date(s).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—"; },
   ago(s) {
     if (!s) return "never";

@@ -3,7 +3,7 @@ import { fmt, esc, info } from "../util.js";
 import { chart, PALETTE, gridOpts } from "../charts.js";
 
 const TIP = {
-  commit: "Banked Closed-Won this quarter + late-stage deals (S4/S5) you are actively working (engaged within the activity window).",
+  commit: "Banked Closed-Won inside the analysis window + late-stage deals (S4/S5) you are actively working (engaged within the activity window).",
   most_likely: "Closed-Won + every open S1–S5 deal weighted by its stage win-probability. The expected value of the pipeline.",
   best_case: "Closed-Won + early pipeline (S1/S2) at weighted value + every Proposal-stage-and-later deal (S3+) landing at full value. The realistic ceiling.",
   coverage: "Open pipeline ÷ quarter target. ≥3× healthy, 2–3× watch, <2× thin.",
@@ -103,7 +103,7 @@ function narrative(n, packet) {
 }
 
 function dealRow(d) {
-  const close = d.closedate ? `<span style="${d.closes_in_quarter ? "" : "color:var(--warning)"}">${fmt.date(d.closedate)}</span>` : "—";
+  const close = d.closedate ? `<span style="${d.closes_in_window ? "" : "color:var(--warning)"}">${fmt.date(d.closedate)}</span>` : "—";
   return `<tr class="row-click" data-deal="${d.deal_id}"><td>${esc(d.dealname)}</td><td>S${d.stage_order}</td>
     <td><span class="badge ${d.scenario}">${d.scenario}</span></td>
     <td class="num">${fmt.money(d.amount)}</td><td class="num">${d.p_win}</td><td class="num">${fmt.money(d.weighted_amount)}</td>

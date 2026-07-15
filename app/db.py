@@ -11,6 +11,7 @@ import aiosqlite
 
 from .config import settings
 from .constants import DEFAULT_SETTINGS, ROSTER, STAGES, entered_prop, exited_prop
+from .metrics.windows import configure_window
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -243,6 +244,7 @@ async def init_db() -> None:
         await _seed_owner_roles(conn)
         await _seed_settings(conn)
         await conn.commit()
+        await refresh_window(conn)
     finally:
         await conn.close()
 
@@ -284,6 +286,11 @@ async def _seed_owner_roles(conn: aiosqlite.Connection) -> None:
 
 
 async def _seed_settings(conn: aiosqlite.Connection) -> None:
+    # Migration: older DBs kept the window start under "quarter_start".
+    if await get_setting(conn, "window_start") is None:
+        legacy = await get_setting(conn, "quarter_start")
+        if legacy:
+            await set_setting(conn, "window_start", legacy)
     for key, value in DEFAULT_SETTINGS.items():
         cur = await conn.execute("SELECT 1 FROM settings WHERE key=?", (key,))
         if await cur.fetchone():
@@ -295,6 +302,19 @@ async def _seed_settings(conn: aiosqlite.Connection) -> None:
 
 
 # --- settings helpers -------------------------------------------------------
+async def refresh_window(conn: aiosqlite.Connection) -> None:
+    """Push the DB-backed analysis window into the in-process window config
+    (metrics.windows). Call after startup seeding and after settings writes."""
+    try:
+        configure_window(
+            await get_setting(conn, "window_start", settings.QUARTER_START),
+            await get_setting(conn, "window_end"),
+            await get_setting(conn, "window_continuous", True),
+        )
+    except ValueError:  # hand-edited/garbage stored window must not block boot
+        configure_window(None, None, None)
+
+
 async def get_setting(conn: aiosqlite.Connection, key: str, default: Any = None) -> Any:
     cur = await conn.execute("SELECT value FROM settings WHERE key=?", (key,))
     row = await cur.fetchone()

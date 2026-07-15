@@ -47,7 +47,7 @@ export async function render(el, ctx) {
         <div id="ex-s1s3-body" class="stat-rows"></div>
       </div>
       <div class="card stat-card">
-        <div class="stat-head">Deals Entered (Q2) <span class="muted" style="text-transform:none;font-weight:400">event-dated counts</span></div>
+        <div class="stat-head">Deals Entered (window) <span class="muted" style="text-transform:none;font-weight:400">event-dated counts</span></div>
         <div class="stat-grid">
           ${["S1", "S2", "S3", "S4", "S5", "WON", "LOST"].map((s) =>
             `<div class="stat-cell"><div class="sv">${et[s] ?? 0}</div><div class="sl">${STAGE_LABEL[s]}</div></div>`).join("")}

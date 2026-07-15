@@ -32,13 +32,13 @@ export async function render(el) {
 
   el.innerHTML = `
     <div class="grid kpis">
-      ${kpi("Stage-0 Created (Q2)", d.totals.stage0_created, "by createdate")}
+      ${kpi("Stage-0 Created", d.totals.stage0_created, "by createdate, in window")}
       ${kpi("Creators", d.totals.creators_count, "incl. off-roster & archived")}
-      ${kpi("Creation Trend", trendTag(d.created.trend), "over the quarter", true)}
+      ${kpi("Creation Trend", trendTag(d.created.trend), "over the window", true)}
     </div>
 
     <div class="panel">
-      <h3>Weekly Stage-0 Created <span class="panel-sub">by creator · scoped to createdate in quarter</span></h3>
+      <h3>Weekly Stage-0 Created <span class="panel-sub">by creator · scoped to createdate in window</span></h3>
       <div class="mode-row">
         <div class="seg" id="pp-cr-mode">${["weekly", "rolling4", "cumulative"].map((m) =>
           `<button data-m="${m}"${m === "weekly" ? ' class="active"' : ""}>${MODE_LABEL[m]}</button>`).join("")}</div>

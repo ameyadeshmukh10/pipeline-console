@@ -23,7 +23,9 @@ Reasoning: **Anthropic Claude** (`claude-opus-4-8`).
 6. **Rep Scorecard** — a transparent **Working Score** (touch coverage, neglect, late-stage
    cadence, meeting discipline) to catch reps not working their deals.
 
-All metrics are scoped to **Q2 2026** (quarter start `2026-04-01`, configurable) and are
+All metrics are scoped to a single **application-wide analysis window**, set in
+**Settings → Analysis Window**: pick a start date and either an end date or
+**Continuous** (no end date — the window follows today, the default). Metrics are
 **event-dated**: a metric counts in the ISO week the stage *event* happened.
 
 > 📐 **[docs/METHODOLOGY.md](docs/METHODOLOGY.md)** — the full write-up of every report's
@@ -64,7 +66,9 @@ AE and click **Run forecast agent** to invoke Claude.
 
 ## Configuration (Settings tab, persisted in SQLite)
 
-Cadence targets (S0→S1 14d, S1→S3 20d, S4/S5 7d), stage win-probabilities + source
+The **analysis window** (start date + end date, or Continuous for no end date —
+applies to every report; `QUARTER_START` env only seeds the initial start),
+cadence targets (S0→S1 14d, S1→S3 20d, S4/S5 7d), stage win-probabilities + source
 (house / hubspot / blend), per-AE quarter targets, and the owner roster/roles. Saving
 recomputes metrics from the existing mirror — no re-fetch.
 
@@ -86,7 +90,8 @@ replica; `.python-version` pins Python 3.12; `requirements.txt` is pinned + incl
 2. In the service's **Variables**, set:
    - `HUBSPOT_ACCESS_TOKEN` — your HubSpot private-app token (required)
    - `ANTHROPIC_API_KEY` — required for the Forecast "Run agent" feature
-   - *(optional)* `FORECAST_MODEL`, `CLAUDE_SOURCING_MODEL`, `PIPELINE_ID`, `QUARTER_START`,
+   - *(optional)* `FORECAST_MODEL`, `CLAUDE_SOURCING_MODEL`, `PIPELINE_ID`, `QUARTER_START`
+     (seeds the analysis window's initial start date; the window is edited in Settings),
      `TIMEZONE`, `HUBSPOT_BASE_URL` — all have sensible defaults.
    - **Do not set `PORT`** — Railway injects it; the app binds `0.0.0.0:$PORT`.
 3. Deploy. Once the healthcheck (`/api/health`) passes, open the generated

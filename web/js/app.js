@@ -21,7 +21,7 @@ const ROUTES = {
 };
 
 const view = document.getElementById("view");
-const ctx = { meta: null, openInspector, refreshFlags };
+const ctx = { meta: null, openInspector, refreshFlags, refreshMeta };
 
 function currentRoute() { return location.hash.replace("#/", "") || "prepipeline"; }
 
@@ -81,6 +81,10 @@ function pollSync() {
 async function refreshMeta() {
   ctx.meta = await api.meta();
   document.getElementById("last-sync").textContent = fmt.ago(ctx.meta.last_success_at);
+  const w = ctx.meta.window;
+  document.getElementById("window-label").textContent = w && w.start
+    ? `${fmt.dateISO(w.start)} → ${w.continuous ? "ongoing" : fmt.dateISO(w.end)}`
+    : "—";
   refreshFlags();
 }
 

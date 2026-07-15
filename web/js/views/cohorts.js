@@ -12,8 +12,8 @@ export async function render(el) {
 
   el.innerHTML = `
     <div class="grid kpis">
-      ${kpi("Q2 Deals Created", t.n, "all create-week cohorts")}
-      ${kpi("Reached S1" + info("Across all Q2 cohorts, % of created deals that ever advanced to Stage 1 (closure-aware)."), fmt.pct(t.conv.s0_s1), `${t.reached.s1} deals`)}
+      ${kpi("Deals Created (window)", t.n, "all create-week cohorts")}
+      ${kpi("Reached S1" + info("Across all in-window cohorts, % of created deals that ever advanced to Stage 1 (closure-aware)."), fmt.pct(t.conv.s0_s1), `${t.reached.s1} deals`)}
       ${kpi("Closed-Lost" + info("% of created deals that ended Closed-Lost. 'Lost from S0' never reached an AE."), fmt.pct(t.conv.s0_lost), `${fmt.pct(t.lost_from_s0_rate)} lost from S0`)}
       ${kpi("Median Stage Depth" + info("The furthest pipeline stage the typical deal reached."), "S" + (t.depth.median ?? 0), "furthest stage reached")}
     </div>
@@ -24,7 +24,7 @@ export async function render(el) {
       <div class="table-scroll"><table class="heat"><thead><tr><th class="week">Create week</th><th class="num">n</th>
         ${STAGE_COLS.map(([, l]) => `<th class="num">${l}</th>`).join("")}<th class="num">Lost</th></tr></thead>
         <tbody>${d.cohorts.map(funnelRow).join("")}
-          <tr style="border-top:2px solid var(--line-strong)"><td class="week"><strong>All Q2</strong></td><td class="num"><strong>${t.n}</strong></td>
+          <tr style="border-top:2px solid var(--line-strong)"><td class="week"><strong>All weeks</strong></td><td class="num"><strong>${t.n}</strong></td>
             ${STAGE_COLS.map(([k]) => `<td class="num"><strong>${fmt.pct(t.reached_pct[k])}</strong></td>`).join("")}
             <td class="num"><strong>${fmt.pct(t.reached_pct.lost)}</strong></td></tr></tbody></table></div></div>
 
@@ -83,7 +83,7 @@ function trendCallout(ct) {
   const span = (t) => t.first != null ? `from ${fmt.pct(t.first)} (earliest cohort) to ${fmt.pct(t.last)} (latest)` : "";
   const sig = (t) => t.p != null && t.direction !== "insufficient_data"
     ? ` · Mann-Kendall p=${t.p.toFixed(2)}${t.p < 0.1 ? ", significant" : ", not significant"}` : "";
-  return `<div class="callout"><strong>Did S0→S1 conversion lift as the quarter progressed?</strong> ${info("Trend of each cohort's Stage 0→Stage 1 conversion across create weeks, mature cohorts only (right-censored recent weeks excluded). Distribution-free Mann-Kendall + Theil-Sen.")}<br>
+  return `<div class="callout"><strong>Did S0→S1 conversion lift as the window progressed?</strong> ${info("Trend of each cohort's Stage 0→Stage 1 conversion across create weeks, mature cohorts only (right-censored recent weeks excluded). Distribution-free Mann-Kendall + Theil-Sen.")}<br>
     Stage 0 → Stage 1 conversion <strong>${VERDICT[s1.direction]}</strong> across mature create-week cohorts${s1.first != null ? " — " + span(s1) : ""}${sig(s1)}.
     ${s1.direction === "insufficient_data" ? '<span class="muted small"> (need ≥4 mature cohorts with ≥3 deals.)</span>' : ""}</div>`;
 }

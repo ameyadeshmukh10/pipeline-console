@@ -13,7 +13,8 @@ import aiosqlite
 from .. import db
 from .common import load_deal_views, load_role_sets, owner_display
 from .flags import compute_flags
-from .windows import (days_between, now_utc, quarter_end_dt, quarter_start_dt)
+from .windows import (days_between, now_utc, window_end_dt,
+                      window_is_continuous, window_start_dt)
 
 LATE_STAGE_ORDERS = {4, 5}
 
@@ -42,7 +43,7 @@ async def build_forecast_packet(conn: aiosqlite.Connection, owner_id: str,
     roles = await load_role_sets(conn)
     views = await load_deal_views(conn)
     now = now_utc()
-    qstart, qend = quarter_start_dt(), quarter_end_dt()
+    qstart, qend = window_start_dt(), window_end_dt()
     stage_probs = s.get("stage_probabilities", {})
     source = s.get("probability_source", "house")
 
@@ -75,7 +76,9 @@ async def build_forecast_packet(conn: aiosqlite.Connection, owner_id: str,
             "amount": v.amount, "p_win": round(p, 3), "weighted_amount": round(amt * p, 2),
             "hubspot_probability": v.hs_prob,
             "closedate": v.closedate.isoformat() if v.closedate else None,
-            "closes_in_quarter": v.closedate is not None and v.closedate <= qend,
+            # A continuous window has no end date, so nothing can close "late".
+            "closes_in_window": v.closedate is not None
+                                and (window_is_continuous() or v.closedate <= qend),
             "days_in_current_stage": round(days_between(entered, now), 1) if entered else None,
             "age_in_pipeline_days": round(days_between(s1_at, now), 1) if s1_at else None,
             "last_engagement_at": roll.get("last_activity_ts") if roll else None,
@@ -105,7 +108,7 @@ async def build_forecast_packet(conn: aiosqlite.Connection, owner_id: str,
                 active_s5 += amt
 
     closed_won_qtd = sum((v.amount or 0.0) for v in mine
-                         if v.won_at is not None and v.won_at >= qstart)
+                         if v.won_at is not None and qstart <= v.won_at <= qend)
     weighted_sum = sum(d["weighted_amount"] for d in deals)
     open_pipeline = sum((v.amount or 0.0) for v in open_pipe)
 

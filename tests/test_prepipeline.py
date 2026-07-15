@@ -7,14 +7,14 @@ from datetime import timezone
 
 from app.metrics.common import DealView
 from app.metrics.prepipeline import (compute_conversion, compute_created,
-                                     compute_speed_to_s1, creator_key, in_quarter)
+                                     compute_speed_to_s1, creator_key, in_window)
 from app.metrics.series import (fit_line, pooled_count_series,
                                 pooled_mean_series, pooled_rate_series)
 from app.metrics.windows import (iso_week_key, iso_weeks_in_range, parse_ts,
-                                 quarter_end_dt, quarter_start_dt)
+                                 window_end_dt, window_start_dt)
 
-QSTART = quarter_start_dt()
-QEND = quarter_end_dt()
+QSTART = window_start_dt()
+QEND = window_end_dt()
 WEEKS = iso_weeks_in_range(QSTART, QEND)
 
 
@@ -143,11 +143,11 @@ def test_pooled_mean_series_pools_sum_n():
 # --------------------------------------------------------------------------- #
 # Scoping & attribution
 # --------------------------------------------------------------------------- #
-def test_in_quarter_excludes_pre_q2():
+def test_in_window_excludes_pre_window():
     pre = mk("A", "2026-03-30T00:00:00Z", {0: "2026-03-30T00:00:00Z"})
     inq = mk("A", "2026-05-04T00:00:00Z", {0: "2026-05-04T00:00:00Z"})
-    assert not in_quarter(pre, QSTART, QEND)
-    assert in_quarter(inq, QSTART, QEND)
+    assert not in_window(pre, QSTART, QEND)
+    assert in_window(inq, QSTART, QEND)
 
 
 def test_created_attributes_by_creator_and_unknown_bucket():

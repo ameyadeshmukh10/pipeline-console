@@ -7,10 +7,10 @@ from app.metrics.common import DealView
 from app.metrics.execution import (compute_entered, compute_gate,
                                    compute_velocity, funnel_summary, owner_key)
 from app.metrics.windows import (iso_week_key, iso_weeks_in_range, parse_ts,
-                                 quarter_end_dt, quarter_start_dt)
+                                 window_end_dt, window_start_dt)
 
-QSTART = quarter_start_dt()
-QEND = quarter_end_dt()
+QSTART = window_start_dt()
+QEND = window_end_dt()
 NOW = parse_ts("2026-06-30T00:00:00Z")
 WEEKS = iso_weeks_in_range(QSTART, QEND)
 

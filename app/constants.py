@@ -7,6 +7,8 @@ from here) so nothing hardcodes a HubSpot id in two places.
 """
 from typing import Dict, List, Optional
 
+from .config import settings as _cfg
+
 # ---------------------------------------------------------------------------
 # Stages (HubSpot pipeline id = "default", label "Sales Pipeline")
 # Only these 8 are in use. The two "(to delete)" stages are ignored entirely.
@@ -116,7 +118,11 @@ DEFAULT_STAGE_PROBABILITIES: Dict[str, float] = {
 }
 
 DEFAULT_SETTINGS: Dict[str, object] = {
-    "quarter_start": "2026-04-01",
+    # Application-wide analysis window (Settings → Analysis Window). Every
+    # report scopes to it. Continuous = no end date (window follows today).
+    "window_start": _cfg.QUARTER_START,
+    "window_end": None,
+    "window_continuous": True,
     "s0_to_s1_target_days": 14,
     "s1_to_s3_target_days": 20,
     "late_stage_activity_days": 7,     # S4/S5 must show activity weekly

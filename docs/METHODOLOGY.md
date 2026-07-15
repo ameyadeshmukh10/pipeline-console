@@ -147,8 +147,11 @@ phase-transactional and idempotent, ~50–150 HTTP calls for ~870 deals in secon
    owner×week) so the UI never computes on the hot path.
 
 ### 1.6 Time & scoping
-- **Window**: Q2 2026 (`quarter_start = 2026-04-01`, configurable). `quarter_end`
-  is derived (3 months − 1s).
+- **Window**: one application-wide analysis window, configured in **Settings →
+  Analysis Window** (`window_start`, plus `window_end` OR `window_continuous`).
+  Continuous means no end date — the window runs through "now" (the default).
+  A set end date is inclusive (23:59:59 business tz). Every report reads the
+  same window; the `QUARTER_START` env var only seeds the initial start date.
 - **ISO weeks in a business timezone** (`America/New_York`, configurable). All
   storage is UTC; week bucketing converts to the business tz first so an event
   near Sunday/Monday midnight lands in a consistent week everywhere. (`tzdata` is
