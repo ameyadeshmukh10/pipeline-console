@@ -7,7 +7,14 @@ const TIP = {
   probmap: "Win-probability assigned to a deal based on its current stage. Used to compute each deal's weighted amount (amount × probability) and the Most-likely forecast.",
   aeTargets: "Each AE's quarter quota in $. Drives coverage (open pipeline ÷ target) and gap-to-target on the Forecast tab.",
   cadence: "Targets the flags & velocity reports check against. S0→S1: hand to an AE within N days. S1→S3: reach Proposal within N days. S4/S5: a late-stage deal must show activity within N days.",
+  volume: "How many deals should ENTER each stage, per week or per month. The Targets & Pacing panel on Execution multiplies the rate by the elapsed window (e.g. 20/wk × 4 weeks = 80 expected) and compares it to the actual count so far. Blank = no target.",
+  convt: "Target conversion rate INTO the next stage, compared against the window-to-date cohort rate on each funnel gate (Execution → Targets & Pacing). Blank = no target.",
 };
+
+// Funnel gates for conversion-rate targets (keys match the Execution report).
+const GATE_DEFS = [["S0_S1", "S0 → S1"], ["S1_S2", "S1 → S2"], ["S2_S3", "S2 → S3"],
+                   ["S3_S4", "S3 → S4"], ["S4_S5", "S4 → S5"], ["S5_WON", "S5 → Won"]];
+const VOLUME_STAGES = ["S0", "S1", "S2", "S3", "S4", "S5"];
 
 export async function render(el, ctx) {
   const meta = ctx.meta || (await api.meta());
@@ -19,6 +26,8 @@ export async function render(el, ctx) {
   const execGroups = [...(v.execution_groups || [])];
   const probs = v.stage_probabilities || {};
   const aeT = v.ae_targets || {};
+  const vt = v.stage_entry_targets || {};
+  const ct = v.conversion_targets || {};
   const openStages = meta.stages.filter((s) => s.is_open || s.is_won);
   const targets = (await api.forecastTargets()).targets;
 
@@ -49,6 +58,22 @@ export async function render(el, ctx) {
           ${openStages.map((s) => `<label class="field">${s.short} ${esc(s.label)}
             <input data-prob="${s.stage_id}" type="number" step="0.05" min="0" max="1" value="${probs[s.stage_id] ?? ""}"/></label>`).join("")}
         </div></div>
+    </div>
+
+    <div class="cols-2">
+      <div class="panel"><h3>Stage Entry Targets ${info(TIP.volume)}<span class="panel-sub"> deals into stage · drives Targets &amp; Pacing</span></h3>
+        <div class="metric-grid">
+          ${VOLUME_STAGES.map((sh) => { const c = vt[sh] || {}; return `<label class="field">${sh} into stage
+            <span class="vt-line"><input data-vt="${sh}" type="number" step="0.1" min="0" value="${c.target ?? ""}" placeholder="—"/>
+            <select data-vtper="${sh}">${["week", "month"].map((p) => `<option value="${p}" ${(c.per || "week") === p ? "selected" : ""}>/ ${p === "week" ? "wk" : "mo"}</option>`).join("")}</select></span></label>`; }).join("")}
+        </div>
+        <div class="muted small">Blank = no target. Fractions are fine (e.g. 4.4 / wk, 5 / mo).</div></div>
+      <div class="panel"><h3>Conversion Targets ${info(TIP.convt)}<span class="panel-sub"> % into next stage</span></h3>
+        <div class="metric-grid">
+          ${GATE_DEFS.map(([k, l]) => `<label class="field">${l}
+            <input data-ct="${k}" type="number" step="1" min="0" max="100" value="${ct[k] != null ? Math.round(ct[k] * 100) : ""}" placeholder="%"/></label>`).join("")}
+        </div>
+        <div class="muted small">Compared to the window-to-date cohort rate per gate. Blank = no target.</div></div>
     </div>
 
     <div class="panel"><h3>Per-AE Quarter Targets ${info(TIP.aeTargets)}<span class="panel-sub"> $ — drives coverage & gap</span></h3>
@@ -100,6 +125,15 @@ export async function render(el, ctx) {
     const at = {};
     el.querySelectorAll("[data-aet]").forEach((i) => { if (i.value !== "") at[i.dataset.aet] = +i.value; });
     values.ae_targets = at;
+    const vTargets = {};
+    el.querySelectorAll("[data-vt]").forEach((i) => {
+      if (i.value === "" || +i.value <= 0) return;
+      vTargets[i.dataset.vt] = { target: +i.value, per: el.querySelector(`[data-vtper="${i.dataset.vt}"]`).value };
+    });
+    values.stage_entry_targets = vTargets;
+    const cTargets = {};
+    el.querySelectorAll("[data-ct]").forEach((i) => { if (i.value !== "" && +i.value > 0) cTargets[i.dataset.ct] = +i.value / 100; });
+    values.conversion_targets = cTargets;
     values.creator_groups = creatorGroups;
     values.execution_groups = execGroups;
     msg.textContent = "Saving…";

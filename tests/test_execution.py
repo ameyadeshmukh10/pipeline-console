@@ -3,9 +3,12 @@
 The gate-conversion formula and the "or beyond" win-counting are the
 trust-critical pieces, mirroring the corrected Pre-Pipeline conversion.
 """
+from datetime import timedelta
+
 from app.metrics.common import DealView
-from app.metrics.execution import (compute_entered, compute_gate,
-                                   compute_velocity, funnel_summary, owner_key)
+from app.metrics.execution import (compute_entered, compute_gate, compute_pacing,
+                                   compute_velocity, funnel_summary, owner_key,
+                                   parse_entry_target)
 from app.metrics.windows import (iso_week_key, iso_weeks_in_range, parse_ts,
                                  window_end_dt, window_start_dt)
 
@@ -134,3 +137,82 @@ def test_funnel_full_product():
 
 def test_owner_key_unassigned():
     assert owner_key(mk(None, {1: "2026-05-04T00:00:00Z"})) == "unassigned"
+
+
+# --------------------------------------------------------------------------- #
+# Targets & pacing — expected-by-now vs actual
+# --------------------------------------------------------------------------- #
+def pace_row(p, stage):
+    return next(e for e in p["entries"] if e["stage"] == stage)
+
+
+def test_pacing_weekly_expected_after_4_weeks():
+    """The canonical example: 20/wk S0 target, 4 weeks elapsed -> 80 expected."""
+    now = QSTART + timedelta(days=28)
+    deals = [mk("A", {0: "2026-04-06T00:00:00Z"}, current_order=0) for _ in range(3)]
+    p = compute_pacing(deals, QSTART, QEND, now,
+                       {"S0": {"target": 20, "per": "week"}}, {})
+    row = pace_row(p, "S0")
+    assert p["elapsed_weeks"] == 4.0
+    assert row["expected"] == 80.0
+    assert row["actual"] == 3
+    assert row["delta"] == -77.0
+    assert row["actual_rate"] == 0.75          # 3 in 4 weeks
+    assert row["status"] == "behind"
+
+
+def test_pacing_monthly_target():
+    now = QSTART + timedelta(days=30.4375)     # exactly one average month
+    p = compute_pacing([], QSTART, QEND, now, {"S4": {"target": 5, "per": "month"}}, {})
+    row = pace_row(p, "S4")
+    assert p["elapsed_months"] == 1.0
+    assert row["expected"] == 5.0 and row["per"] == "month"
+
+
+def test_pacing_ahead_and_close_statuses():
+    now = QSTART + timedelta(days=28)
+    s1 = [mk("A", {1: "2026-04-07T00:00:00Z"}) for _ in range(5)]
+    s2 = [mk("A", {1: "2026-04-06T00:00:00Z", 2: "2026-04-08T00:00:00Z"}, current_order=2)
+          for _ in range(37)]
+    p = compute_pacing(s1 + s2, QSTART, QEND, now,
+                       {"S1": {"target": 1, "per": "week"},           # expected 4, actual 42
+                        "S2": {"target": 10, "per": "week"}}, {})     # expected 40, actual 37
+    assert pace_row(p, "S1")["status"] == "ahead"
+    row2 = pace_row(p, "S2")
+    assert row2["actual"] == 37 and row2["status"] == "close"          # 92.5% of pace
+
+
+def test_pacing_elapsed_clamps_to_window_end():
+    """A window that already ended freezes pacing at its end (no runaway expected)."""
+    qend = QSTART + timedelta(days=14)
+    now = QSTART + timedelta(days=100)
+    p = compute_pacing([], QSTART, qend, now, {"S0": {"target": 20, "per": "week"}}, {})
+    assert p["elapsed_weeks"] == 2.0
+    assert pace_row(p, "S0")["expected"] == 40.0
+
+
+def test_pacing_skips_invalid_targets():
+    now = QSTART + timedelta(days=7)
+    p = compute_pacing([], QSTART, QEND, now,
+                       {"S1": {"target": "x"}, "S2": {"target": -3, "per": "week"},
+                        "S9": {"target": 5, "per": "week"}, "S3": "nonsense"}, {})
+    assert p["entries"] == []
+    assert parse_entry_target({"target": 4.4, "per": "bogus"}) == (4.4, "week")  # per falls back
+    assert parse_entry_target(None) is None
+
+
+def test_pacing_conversion_targets():
+    base = "2026-05-04T00:00:00Z"
+    adv = [mk("A", {1: base, 2: "2026-05-06T00:00:00Z"}, current_order=2) for _ in range(2)]
+    lost = [mk("B", {1: base, 7: "2026-05-07T00:00:00Z"}, is_open=0, current_order=7)]
+    now = QSTART + timedelta(days=42)
+    p = compute_pacing(adv + lost, QSTART, QEND, now, {},
+                       {"S1_S2": 0.5,          # actual 2/3 ≈ 0.667 -> ahead
+                        "S4_S5": 0.5,          # no cohort -> no_data
+                        "S2_S3": "garbage"})   # ignored
+    conv = {c["gate"]: c for c in p["conversion"]}
+    assert set(conv) == {"S1_S2", "S4_S5"}
+    assert conv["S1_S2"]["status"] == "ahead"
+    assert abs(conv["S1_S2"]["actual"] - 2 / 3) < 1e-9
+    assert conv["S1_S2"]["delta_pts"] == 16.7
+    assert conv["S4_S5"]["status"] == "no_data" and conv["S4_S5"]["actual"] is None

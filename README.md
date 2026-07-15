@@ -68,9 +68,13 @@ AE and click **Run forecast agent** to invoke Claude.
 
 The **analysis window** (start date + end date, or Continuous for no end date —
 applies to every report; `QUARTER_START` env only seeds the initial start),
-cadence targets (S0→S1 14d, S1→S3 20d, S4/S5 7d), stage win-probabilities + source
-(house / hubspot / blend), per-AE quarter targets, and the owner roster/roles. Saving
-recomputes metrics from the existing mirror — no re-fetch.
+cadence targets (S0→S1 14d, S1→S3 20d, S4/S5 7d), **stage-entry volume targets**
+(deals into each stage per week or per month, e.g. S0 20/wk … S4 5/mo) and
+**conversion-rate targets** per funnel gate — both drive the **Targets & Pacing**
+panel on Execution (expected-by-now = rate × elapsed window vs actual, plus target
+lines on the weekly charts) — stage win-probabilities + source (house / hubspot /
+blend), per-AE quarter targets, and the owner roster/roles. Saving recomputes
+metrics from the existing mirror — no re-fetch.
 
 ## Tests
 

@@ -13,7 +13,7 @@ Plus the open-pipeline aging snapshot.
 """
 from collections import Counter, defaultdict
 from datetime import datetime
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import aiosqlite
 
@@ -214,6 +214,100 @@ def funnel_summary(deals: List[DealView], qstart: datetime, qend: datetime) -> D
 
 
 # --------------------------------------------------------------------------- #
+# Targets & pacing — expected-by-now vs actual, window-to-date
+# --------------------------------------------------------------------------- #
+AVG_DAYS_PER_MONTH = 30.4375  # 365.25 / 12
+PACING_STAGES = [(s, o) for o, s in STAGE_SHORTS.items() if 0 <= o <= 6]  # S0..WON
+
+
+def parse_entry_target(cfg: Any) -> Optional[Tuple[float, str]]:
+    """Validate a stage_entry_targets entry ({'target': n, 'per': 'week'|'month'}).
+    Returns (target, per) or None; a missing/invalid 'per' falls back to weekly."""
+    if not isinstance(cfg, dict):
+        return None
+    try:
+        target = float(cfg.get("target"))
+    except (TypeError, ValueError):
+        return None
+    if target <= 0:
+        return None
+    per = cfg.get("per")
+    return (target, per if per in ("week", "month") else "week")
+
+
+def _pace_status(ratio: Optional[float]) -> Optional[str]:
+    if ratio is None:
+        return None
+    if ratio >= 1.0:
+        return "ahead"
+    if ratio >= 0.9:
+        return "close"
+    return "behind"
+
+
+def compute_pacing(deals: List[DealView], qstart: datetime, qend: datetime,
+                   now: datetime, entry_targets: Any, conversion_targets: Any,
+                   funnel: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Run-rate pacing against the configured targets, up to the present date
+    (or the window end, whichever comes first).
+
+    Volume: expected-by-now = target × elapsed weeks (or months) — e.g. a 20/wk
+    S0 target 4 weeks in means 80 expected — vs actual deals that ENTERED the
+    stage in-window, plus the actual run rate in the target's own unit.
+    Conversion: the window-cohort gate rate (funnel_summary) vs its target."""
+    end_obs = min(now, qend)
+    elapsed_days = max(0.0, (end_obs - qstart).total_seconds() / 86400.0)
+    elapsed = {"week": elapsed_days / 7.0, "month": elapsed_days / AVG_DAYS_PER_MONTH}
+
+    entries: List[Dict[str, Any]] = []
+    for short, order in PACING_STAGES:
+        parsed = parse_entry_target((entry_targets or {}).get(short)
+                                    if isinstance(entry_targets, dict) else None)
+        if parsed is None:
+            continue
+        target, per = parsed
+        units = elapsed[per]
+        expected = target * units
+        actual = sum(1 for v in deals if _in(v.entries.get(order), qstart, end_obs))
+        ratio = (actual / expected) if expected > 0 else None
+        entries.append({
+            "stage": short, "target": target, "per": per,
+            "expected": round(expected, 1), "actual": actual,
+            "delta": round(actual - expected, 1),
+            "actual_rate": round(actual / units, 2) if units > 0 else None,
+            "pct_of_pace": round(ratio, 3) if ratio is not None else None,
+            "status": _pace_status(ratio),
+        })
+
+    conversion: List[Dict[str, Any]] = []
+    gates = (funnel or funnel_summary(deals, qstart, qend))["gates"]
+    for g in gates:
+        raw = (conversion_targets or {}).get(g["key"]) if isinstance(conversion_targets, dict) else None
+        try:
+            tgt = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if not 0 < tgt <= 1:
+            continue
+        rate = g["rate"]
+        conversion.append({
+            "gate": g["key"], "label": g["label"], "target": tgt,
+            "actual": rate, "n": g["denom"],
+            "delta_pts": round((rate - tgt) * 100, 1) if rate is not None else None,
+            "status": _pace_status(rate / tgt) if rate is not None else "no_data",
+        })
+
+    return {
+        "as_of": end_obs.isoformat(),
+        "elapsed_days": round(elapsed_days, 1),
+        "elapsed_weeks": round(elapsed["week"], 2),
+        "elapsed_months": round(elapsed["month"], 2),
+        "entries": entries,
+        "conversion": conversion,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Open-pipeline aging snapshot
 # --------------------------------------------------------------------------- #
 def _aging(deals: List[DealView], roles, s: Dict[str, Any], now: datetime) -> Dict[str, Any]:
@@ -299,6 +393,11 @@ async def execution_report(conn: aiosqlite.Connection) -> Dict[str, Any]:
         C["aggregate"]["fit"] = fit_line(
             [(c["rate"] * 100 if c["rate"] is not None else None) for c in C["aggregate"]["weekly"]], weeks, complete)
 
+    fs = funnel_summary(deals, qstart, qend)
+    pacing = compute_pacing(deals, qstart, qend, now,
+                            s.get("stage_entry_targets", {}),
+                            s.get("conversion_targets", {}), funnel=fs)
+
     return {
         "weeks": [week_label(*wk) for wk in weeks],
         "owners": owners,
@@ -313,7 +412,8 @@ async def execution_report(conn: aiosqlite.Connection) -> Dict[str, Any]:
         "velocity": velocity,
         "velocity_s1_s3": velocity_s1_s3_periods(deals, qstart, qend),
         "conversion": conversion,
-        "funnel_summary": funnel_summary(deals, qstart, qend),
+        "funnel_summary": fs,
+        "pacing": pacing,
         "aging": _aging(deals, roles, s, now),
         "totals": {"owners": len(owners)},
     }

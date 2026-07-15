@@ -172,9 +172,19 @@ async def pre_pipeline_report(conn: aiosqlite.Connection) -> Dict[str, Any]:
     speed = compute_speed_to_s1(q_deals, weeks, groups)
     conversion = compute_conversion(q_deals, weeks, groups)
 
+    # Weekly-equivalent S0 volume target (Settings → Stage Entry Targets), for
+    # the target line on the created chart.
+    from .execution import AVG_DAYS_PER_MONTH, parse_entry_target
+    parsed = parse_entry_target((await db.get_setting(conn, "stage_entry_targets", {}) or {}).get("S0"))
+    s0_weekly_target = None
+    if parsed:
+        target, per = parsed
+        s0_weekly_target = round(target if per == "week" else target * 7.0 / AVG_DAYS_PER_MONTH, 2)
+
     return {
         "window_start": qstart.isoformat(),
         "window_end": qend.isoformat(),
+        "s0_weekly_target": s0_weekly_target,
         "weeks": [week_label(*wk) for wk in weeks],
         "creators": creators,
         "groups": groups,

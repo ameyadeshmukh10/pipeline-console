@@ -111,6 +111,13 @@ function buildCreated(d, weeks, groups) {
     const refOf = (s) => (state.mode === "cumulative" ? s.pace : (s.fit ? s.fit.y : null));
     addRef("agg", "Aggregate " + (state.mode === "cumulative" ? "pace" : "trend"), refOf(S.aggregate), AGG);
     groups.forEach((g, gi) => addRef(gk(g), g.name + (state.mode === "cumulative" ? " pace" : " trend"), refOf(S.by_group[g.id]), gcolor(gi)));
+    // dashed target-pace line from Settings → Stage Entry Targets (S0)
+    if (d.s0_weekly_target && state.mode !== "rolling4") {
+      const t = d.s0_weekly_target;
+      ds.push({ label: `Target (${t}/wk)`,
+        data: weeks.map((_, i) => r1(state.mode === "cumulative" ? t * (i + 1) : t)),
+        borderColor: "#94a3b8", borderDash: [3, 3], borderWidth: 1.5, pointRadius: 0, tension: 0, spanGaps: true });
+    }
 
     chart("pp-created", { type: "line", data: { labels: weeks, datasets: ds },
       options: { ...gridOpts, plugins: { legend: { display: false } } } });
