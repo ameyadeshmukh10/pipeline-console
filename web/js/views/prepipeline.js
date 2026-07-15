@@ -32,13 +32,13 @@ export async function render(el) {
 
   el.innerHTML = `
     <div class="grid kpis">
-      ${kpi("Stage-0 Created (Q2)", d.totals.stage0_created, "by createdate")}
+      ${kpi("Stage-0 Created", d.totals.stage0_created, "by createdate, in window")}
       ${kpi("Creators", d.totals.creators_count, "incl. off-roster & archived")}
-      ${kpi("Creation Trend", trendTag(d.created.trend), "over the quarter", true)}
+      ${kpi("Creation Trend", trendTag(d.created.trend), "over the window", true)}
     </div>
 
     <div class="panel">
-      <h3>Weekly Stage-0 Created <span class="panel-sub">by creator · scoped to createdate in quarter</span></h3>
+      <h3>Weekly Stage-0 Created <span class="panel-sub">by creator · scoped to createdate in window</span></h3>
       <div class="mode-row">
         <div class="seg" id="pp-cr-mode">${["weekly", "rolling4", "cumulative"].map((m) =>
           `<button data-m="${m}"${m === "weekly" ? ' class="active"' : ""}>${MODE_LABEL[m]}</button>`).join("")}</div>
@@ -111,6 +111,13 @@ function buildCreated(d, weeks, groups) {
     const refOf = (s) => (state.mode === "cumulative" ? s.pace : (s.fit ? s.fit.y : null));
     addRef("agg", "Aggregate " + (state.mode === "cumulative" ? "pace" : "trend"), refOf(S.aggregate), AGG);
     groups.forEach((g, gi) => addRef(gk(g), g.name + (state.mode === "cumulative" ? " pace" : " trend"), refOf(S.by_group[g.id]), gcolor(gi)));
+    // dashed target-pace line from Settings → Stage Entry Targets (S0)
+    if (d.s0_weekly_target && state.mode !== "rolling4") {
+      const t = d.s0_weekly_target;
+      ds.push({ label: `Target (${t}/wk)`,
+        data: weeks.map((_, i) => r1(state.mode === "cumulative" ? t * (i + 1) : t)),
+        borderColor: "#94a3b8", borderDash: [3, 3], borderWidth: 1.5, pointRadius: 0, tension: 0, spanGaps: true });
+    }
 
     chart("pp-created", { type: "line", data: { labels: weeks, datasets: ds },
       options: { ...gridOpts, plugins: { legend: { display: false } } } });

@@ -122,12 +122,12 @@ def _has_back_movement(view: DealView) -> bool:
 
 async def compute_all_flags(conn: aiosqlite.Connection, now: Optional[datetime] = None) -> Dict[str, Any]:
     """All active flags across deals + a summary, for the flags drawer/API."""
-    from .windows import quarter_start_dt
+    from .windows import window_end_dt, window_start_dt
     s = await db.get_all_settings(conn)
     roles = await load_role_sets(conn)
     views = await load_deal_views(conn)
     now = now or now_utc()
-    qstart = quarter_start_dt()
+    qstart, qend = window_start_dt(), window_end_dt()
     rollups = {r["deal_id"]: dict(r) for r in
                await (await conn.execute("SELECT * FROM deal_activity_rollup")).fetchall()}
 
@@ -135,8 +135,8 @@ async def compute_all_flags(conn: aiosqlite.Connection, now: Optional[datetime] 
     by_code: Dict[str, int] = defaultdict(int)
     by_sev: Dict[str, int] = defaultdict(int)
     for v in views.values():
-        # Scope flags to the analysis window: open deals + deals closed in Q2.
-        if not v.is_open and not (v.closedate is not None and v.closedate >= qstart):
+        # Scope flags to the analysis window: open deals + deals closed in it.
+        if not v.is_open and not (v.closedate is not None and qstart <= v.closedate <= qend):
             continue
         fl = compute_flags(v, rollups.get(v.deal_id), roles, s, now)
         if not fl:

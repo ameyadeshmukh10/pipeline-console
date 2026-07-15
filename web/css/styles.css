@@ -121,8 +121,13 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 /* Buttons / inputs */
 .btn { background: var(--panel); border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 14px; font-weight: 600; font-size: 13px; cursor: pointer; color: var(--ink); }
 .btn:hover { border-color: var(--accent); color: var(--accent); }
-select, input[type=number], input[type=text] { font: inherit; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; color: var(--ink); }
+select, input[type=number], input[type=text], input[type=date] { font: inherit; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; color: var(--ink); }
+input[type=date]:disabled { background: #f2f4f8; color: var(--muted); }
 label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-weight: 600; color: var(--ink-soft); }
+.win-row { display: flex; gap: 18px; align-items: flex-end; flex-wrap: wrap; }
+.win-cont { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--ink-soft); padding: 9px 0; cursor: pointer; }
+.vt-line { display: flex; gap: 6px; }
+.vt-line input { flex: 1; min-width: 0; }
 .toolbar { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 4px; }
 .spinner { width: 14px; height: 14px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; display: inline-block; animation: spin .7s linear infinite; vertical-align: -2px; }
 @keyframes spin { to { transform: rotate(360deg); } }

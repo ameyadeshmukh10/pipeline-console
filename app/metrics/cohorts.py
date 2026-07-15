@@ -12,7 +12,7 @@ import aiosqlite
 from .common import load_deal_views
 from .stats import median, trend
 from .windows import (days_between, is_mature, iso_weeks_in_range, now_utc,
-                      quarter_start_dt, week_label)
+                      week_label, window_end_dt, window_start_dt)
 
 # transitions we time, as (from_order, to_order)
 LEGS = [("s0_s1", 0, 1), ("s1_s2", 1, 2), ("s2_s3", 2, 3), ("s3_s4", 3, 4), ("s4_s5", 4, 5)]
@@ -62,14 +62,14 @@ def _summarize(acc: Dict[str, Any], week: str, mature: bool) -> Dict[str, Any]:
 async def cohort_report(conn: aiosqlite.Connection) -> Dict[str, Any]:
     views = await load_deal_views(conn)
     now = now_utc()
-    qstart = quarter_start_dt()
-    weeks = iso_weeks_in_range(qstart, now)
+    qstart, qend = window_start_dt(), window_end_dt()
+    weeks = iso_weeks_in_range(qstart, min(now, qend))
 
     by_week: Dict[Any, Dict[str, Any]] = {wk: _blank() for wk in weeks}
     totals = _blank()
 
     for v in views.values():
-        if v.createdate is None or v.createdate < qstart:
+        if v.createdate is None or not (qstart <= v.createdate <= qend):
             continue
         wk = (v.create_iso_year, v.create_iso_week)
         acc = by_week.get(wk)
@@ -100,7 +100,7 @@ async def cohort_report(conn: aiosqlite.Connection) -> Dict[str, Any]:
     cohorts = [_summarize(by_week[wk], week_label(*wk), is_mature(wk[0], wk[1], 14, now))
                for wk in weeks]
 
-    # Did conversion lift as the quarter progressed? Trend across cohort weeks
+    # Did conversion lift as the window progressed? Trend across cohort weeks
     # (only cohorts with enough deals to be meaningful).
     def conv_trend(field: str) -> Dict[str, Any]:
         # Mature cohorts only — recent weeks haven't had time to convert, which
@@ -113,6 +113,6 @@ async def cohort_report(conn: aiosqlite.Connection) -> Dict[str, Any]:
         return {**t, "first": first, "last": last,
                 "delta": (last - first) if (first is not None and last is not None) else None}
 
-    return {"cohorts": cohorts, "totals": _summarize(totals, "All Q2", True),
+    return {"cohorts": cohorts, "totals": _summarize(totals, "All weeks", True),
             "stage_keys": [k for k, _ in STAGE_KEYS], "legs": [k for k, _f, _t in LEGS],
             "conv_trends": {"s0_s1": conv_trend("s0_s1"), "s0_lost": conv_trend("s0_lost")}}

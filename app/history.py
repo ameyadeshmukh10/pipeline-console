@@ -23,8 +23,8 @@ from . import db
 from .config import settings
 from .metrics.common import load_deal_views
 from .metrics.execution import funnel_summary, velocity_s1_s3_periods
-from .metrics.windows import (iso_week_key, now_utc, quarter_end_dt,
-                              quarter_start_dt, week_start_date)
+from .metrics.windows import (iso_week_key, now_utc, week_start_date,
+                              window_end_dt, window_start_dt)
 from .sync.runner import run_sync
 from .sync.status import sync_manager
 
@@ -130,12 +130,14 @@ async def write_snapshot(sync_first: bool = True, week: Optional[Tuple[int, int]
     finally:
         await mconn.close()
 
-    qstart, qend = quarter_start_dt(), quarter_end_dt()
+    qstart, qend = window_start_dt(), window_end_dt()
     vel = velocity_s1_s3_periods(deals, qstart, qend)   # reused from Execution
     fun = funnel_summary(deals, qstart, qend)           # reused from Execution
 
     now = now_utc()
     iy, iw = week or last_complete_week(now)
+    # History rows stay labelled by the window start (column name kept for
+    # continuity with pre-window "quarter_start" rows).
     quarter_start = qstart.date().isoformat()
     taken_at = now.isoformat()
     vrows, frows = build_rows(vel, fun, quarter_start, iy, iw, taken_at)
@@ -177,7 +179,7 @@ async def maybe_run_due() -> Optional[Dict[str, Any]]:
         return None
 
     iy, iw = last_complete_week(now)
-    quarter_start = quarter_start_dt().date().isoformat()
+    quarter_start = window_start_dt().date().isoformat()
     hconn = await history_conn()
     try:
         if await has_snapshot(hconn, quarter_start, iy, iw):

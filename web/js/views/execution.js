@@ -47,13 +47,15 @@ export async function render(el, ctx) {
         <div id="ex-s1s3-body" class="stat-rows"></div>
       </div>
       <div class="card stat-card">
-        <div class="stat-head">Deals Entered (Q2) <span class="muted" style="text-transform:none;font-weight:400">event-dated counts</span></div>
+        <div class="stat-head">Deals Entered (window) <span class="muted" style="text-transform:none;font-weight:400">event-dated counts</span></div>
         <div class="stat-grid">
           ${["S1", "S2", "S3", "S4", "S5", "WON", "LOST"].map((s) =>
             `<div class="stat-cell"><div class="sv">${et[s] ?? 0}</div><div class="sl">${STAGE_LABEL[s]}</div></div>`).join("")}
         </div>
       </div>
     </div>
+
+    ${pacingPanel(D.pacing)}
 
     <div class="panel funnel-panel">
       <h3>Funnel Conversion <span class="panel-sub">cohort conversion at each gate · open deals excluded</span></h3>
@@ -128,6 +130,44 @@ function renderS1S3() {
     row("Full Quarter", "full") + row("First Third", "first_third") + row("Second Third", "second_third") + row("Last Third", "last_third");
 }
 
+// --- Targets & Pacing ----------------------------------------------------------
+const PACE_TIP =
+  "Run-rate pacing, window-to-date. Expected by now = target × elapsed time (a 20/wk target 4 weeks in expects 80; a /mo target uses elapsed months). Actual counts deals that ENTERED the stage inside the window, up to the present date. Conversion targets compare against the window-to-date cohort rate per gate.";
+const paceBadge = (st) => st == null ? "—"
+  : st === "no_data" ? `<span class="badge neutral">no data</span>`
+  : `<span class="badge ${st === "ahead" ? "good" : st === "close" ? "warning" : "critical"}">${st}</span>`;
+const signed = (v, unit = "") => v == null ? "—"
+  : `<span style="color:${v >= 0 ? "var(--good)" : "var(--critical)"}">${v >= 0 ? "+" : ""}${v}${unit}</span>`;
+const perLbl = (p) => p === "month" ? "mo" : "wk";
+
+function pacingPanel(p) {
+  const head = `<h3>Targets &amp; Pacing ${info(PACE_TIP)}<span class="panel-sub">expected by now vs actual · as of ${fmt.datetime(p.as_of)} · ${p.elapsed_weeks} wks (${p.elapsed_months} mo) elapsed</span></h3>`;
+  if (!p.entries.length && !p.conversion.length)
+    return `<div class="panel">${head}<div class="muted small">No volume or conversion targets set — add them in Settings → Stage Entry / Conversion Targets.</div></div>`;
+  const vol = !p.entries.length ? "" : `
+    <div class="table-scroll"><table><thead><tr><th>Into stage</th><th class="num">Target</th><th class="num">Expected by now</th><th class="num">Actual</th><th class="num">Δ</th><th class="num">Actual rate</th><th class="num">% of pace</th><th>Status</th></tr></thead>
+      <tbody>${p.entries.map((e) => `<tr>
+        <td><strong>${e.stage}</strong></td>
+        <td class="num">${e.target} / ${perLbl(e.per)}</td>
+        <td class="num">${e.expected}</td>
+        <td class="num"><strong>${e.actual}</strong></td>
+        <td class="num">${signed(e.delta)}</td>
+        <td class="num">${e.actual_rate == null ? "—" : e.actual_rate + " / " + perLbl(e.per)}</td>
+        <td class="num">${e.pct_of_pace == null ? "—" : Math.round(e.pct_of_pace * 100) + "%"}</td>
+        <td>${paceBadge(e.status)}</td></tr>`).join("")}</tbody></table></div>`;
+  const conv = !p.conversion.length ? "" : `
+    <div class="section-title" style="margin:14px 0 6px">Conversion vs target <span class="muted small" style="font-weight:400;text-transform:none">window-to-date cohort rate</span></div>
+    <div class="table-scroll"><table><thead><tr><th>Gate</th><th class="num">Target</th><th class="num">Actual</th><th class="num">Δ</th><th class="num">n</th><th>Status</th></tr></thead>
+      <tbody>${p.conversion.map((c) => `<tr>
+        <td><strong>${c.label}</strong></td>
+        <td class="num">${Math.round(c.target * 100)}%</td>
+        <td class="num"><strong>${c.actual == null ? "—" : Math.round(c.actual * 100) + "%"}</strong></td>
+        <td class="num">${signed(c.delta_pts, " pts")}</td>
+        <td class="num">${c.n}</td>
+        <td>${paceBadge(c.status)}</td></tr>`).join("")}</tbody></table></div>`;
+  return `<div class="panel">${head}${vol}${conv}</div>`;
+}
+
 function funnelFlow(fs) {
   const cards = fs.gates.map((g) =>
     `<div class="gate-card"><div class="gate-label">${g.label}</div><div class="gate-rate">${g.rate == null ? "—" : Math.round(g.rate * 100) + "%"}</div><div class="gate-sub">${g.advanced}/${g.denom}</div></div>`
@@ -187,8 +227,20 @@ function drawEntered() {
       if (y) ds.push({ label: x.label + " trend", data: y.map(r1), borderColor: x.c, borderDash: [6, 4], borderWidth: 1.5, pointRadius: 0, tension: 0, spanGaps: true });
     });
   }
+  const t = targetLine(s.stage, s.mode);
+  if (t) ds.push(t);
   chart("ex-entered", lineCfg(ds));
   document.getElementById("ex-entered-table").innerHTML = countTable(E);
+}
+
+// Dashed target-pace overlay for the selected stage (weekly & cumulative modes).
+function targetLine(stage, mode) {
+  const e = (D.pacing.entries || []).find((x) => x.stage === stage);
+  if (!e || mode === "rolling4") return null;
+  const wk = e.per === "month" ? e.target * 7 / 30.4375 : e.target;   // weekly equivalent
+  const data = WEEKS.map((_, i) => r1(mode === "cumulative" ? wk * (i + 1) : wk));
+  return { label: `Target (${e.target}/${perLbl(e.per)})`, data, borderColor: "#94a3b8",
+           borderDash: [3, 3], borderWidth: 1.5, pointRadius: 0, tension: 0, spanGaps: true };
 }
 
 // --- ② Velocity (aggregate + trend) ------------------------------------------

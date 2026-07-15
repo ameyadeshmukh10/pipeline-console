@@ -147,8 +147,11 @@ phase-transactional and idempotent, ~50–150 HTTP calls for ~870 deals in secon
    owner×week) so the UI never computes on the hot path.
 
 ### 1.6 Time & scoping
-- **Window**: Q2 2026 (`quarter_start = 2026-04-01`, configurable). `quarter_end`
-  is derived (3 months − 1s).
+- **Window**: one application-wide analysis window, configured in **Settings →
+  Analysis Window** (`window_start`, plus `window_end` OR `window_continuous`).
+  Continuous means no end date — the window runs through "now" (the default).
+  A set end date is inclusive (23:59:59 business tz). Every report reads the
+  same window; the `QUARTER_START` env var only seeds the initial start date.
 - **ISO weeks in a business timezone** (`America/New_York`, configurable). All
   storage is UTC; week bucketing converts to the business tz first so an event
   near Sunday/Monday midnight lands in a consistent week everywhere. (`tzdata` is
@@ -282,6 +285,19 @@ when no groups exist.
   significance) plus a robust **Theil-Sen** slope (days/week). It's **gated at
   n ≥ 8**: below that it reports "insufficient data — N transitions" rather than a
   direction. Per AE (gated) and pooled total.
+- **Targets & Pacing** — run-rate pacing against Settings targets, window-to-date.
+  *Volume*: `stage_entry_targets` sets deals **entering** a stage per week or per
+  month (e.g. S0 20/wk, S4 5/mo). Expected-by-now = target × elapsed time
+  (fractional weeks = days/7; months = days/30.4375 — so 4 elapsed weeks of a
+  20/wk target expects 80), compared to actual in-window stage entries up to the
+  present date (or the window end if it's already passed), with the actual run
+  rate in the target's own unit. *Conversion*: `conversion_targets` sets a target
+  rate per funnel gate, compared to the window-to-date cohort rate from
+  `funnel_summary` (same math as the explained funnel). Status: ≥100% of pace =
+  ahead, ≥90% = close, else behind — thresholds are cosmetic; the exact numbers
+  are always shown. Weekly Entered charts (and Pre-Pipeline's Stage-0 chart)
+  overlay the target as a dashed line (weekly level, or target × week-index
+  cumulatively; /mo targets are shown at their weekly equivalent ×7/30.4375).
 
 ---
 

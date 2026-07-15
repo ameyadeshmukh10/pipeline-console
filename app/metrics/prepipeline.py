@@ -1,6 +1,7 @@
 """Report 1 — Pre-Pipeline Generation (SDR quality).
 
-Reworked: scoped to deals whose CREATEDATE falls in the quarter, attributed by
+Reworked: scoped to deals whose CREATEDATE falls in the analysis window,
+attributed by
 the true CREATOR (hs_created_by_user_id), and includes EVERY creator (roster,
 off-roster, archived ex-reps). Three deterministic, unit-tested views:
 
@@ -26,7 +27,7 @@ from .series import (fit_line, pooled_count_series, pooled_mean_series,
                      pooled_rate_series)
 from .stats import trend
 from .windows import (days_between, iso_week_key, iso_weeks_in_range, now_utc,
-                      quarter_end_dt, quarter_start_dt, week_label)
+                      week_label, window_end_dt, window_start_dt)
 
 Week = Tuple[int, int]
 
@@ -35,12 +36,12 @@ def creator_key(v: DealView) -> str:
     return v.created_by or UNKNOWN
 
 
-def in_quarter(v: DealView, qstart: datetime, qend: datetime) -> bool:
+def in_window(v: DealView, qstart: datetime, qend: datetime) -> bool:
     return v.createdate is not None and qstart <= v.createdate <= qend
 
 
 # --------------------------------------------------------------------------- #
-# Pure computation (operate on a list of DealViews already scoped to the quarter)
+# Pure computation (operate on a list of DealViews already scoped to the window)
 # --------------------------------------------------------------------------- #
 def compute_created(deals: List[DealView], weeks: List[Week],
                     qstart: datetime, now: datetime, groups=()) -> Dict[str, Any]:
@@ -155,9 +156,10 @@ async def pre_pipeline_report(conn: aiosqlite.Connection) -> Dict[str, Any]:
     views = await load_deal_views(conn, roster_only=False, by="creator")
 
     now = now_utc()
-    qstart, qend = quarter_start_dt(), quarter_end_dt()
-    weeks = iso_weeks_in_range(qstart, min(now, qend))
-    q_deals = [v for v in views.values() if in_quarter(v, qstart, qend)]
+    qstart, qend = window_start_dt(), window_end_dt()
+    end_obs = min(now, qend)  # observable end of the window
+    weeks = iso_weeks_in_range(qstart, end_obs)
+    q_deals = [v for v in views.values() if in_window(v, qstart, qend)]
 
     totals = Counter(creator_key(v) for v in q_deals)
     creators = [person_meta(cid, n, names, roles) for cid, n in totals.items()]
@@ -166,13 +168,23 @@ async def pre_pipeline_report(conn: aiosqlite.Connection) -> Dict[str, Any]:
 
     groups = normalize_groups(await db.get_setting(conn, "creator_groups", []), totals, creators)
 
-    created = compute_created(q_deals, weeks, qstart, now, groups)
+    created = compute_created(q_deals, weeks, qstart, end_obs, groups)
     speed = compute_speed_to_s1(q_deals, weeks, groups)
     conversion = compute_conversion(q_deals, weeks, groups)
 
+    # Weekly-equivalent S0 volume target (Settings → Stage Entry Targets), for
+    # the target line on the created chart.
+    from .execution import AVG_DAYS_PER_MONTH, parse_entry_target
+    parsed = parse_entry_target((await db.get_setting(conn, "stage_entry_targets", {}) or {}).get("S0"))
+    s0_weekly_target = None
+    if parsed:
+        target, per = parsed
+        s0_weekly_target = round(target if per == "week" else target * 7.0 / AVG_DAYS_PER_MONTH, 2)
+
     return {
-        "quarter_start": qstart.isoformat(),
-        "quarter_end": qend.isoformat(),
+        "window_start": qstart.isoformat(),
+        "window_end": qend.isoformat(),
+        "s0_weekly_target": s0_weekly_target,
         "weeks": [week_label(*wk) for wk in weeks],
         "creators": creators,
         "groups": groups,
@@ -188,8 +200,8 @@ async def list_creators(conn: aiosqlite.Connection) -> List[Dict[str, Any]]:
     roles = await load_role_sets(conn)
     names = await load_person_names(conn)
     views = await load_deal_views(conn, roster_only=False, by="creator")
-    qstart, qend = quarter_start_dt(), quarter_end_dt()
-    totals = Counter(creator_key(v) for v in views.values() if in_quarter(v, qstart, qend))
+    qstart, qend = window_start_dt(), window_end_dt()
+    totals = Counter(creator_key(v) for v in views.values() if in_window(v, qstart, qend))
     creators = [person_meta(cid, n, names, roles) for cid, n in totals.items()]
     creators.sort(key=lambda c: (-c["total_created"], c["name"]))
     disambiguate_first_names(creators)

@@ -1,10 +1,18 @@
 """Time + ISO-week helpers. All storage is UTC; weekly buckets are computed in
 the configured business timezone (default America/New_York) so an event near
 Sunday/Monday midnight lands in a consistent ISO week everywhere.
+
+Also owns the APPLICATION-WIDE ANALYSIS WINDOW: every report scopes to
+[window_start_dt(), window_end_dt()]. The window is configured from the
+DB-backed settings (window_start / window_end / window_continuous) via
+``configure_window`` — called at startup and on every settings save. When a
+window is continuous it has no end date: window_end_dt() is "now". Unconfigured
+(e.g. plain unit tests) it falls back to the QUARTER_START env default with the
+legacy derived end (start + 3 months − 1s).
 """
 import re
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Tuple
+from datetime import date, datetime, timedelta, timezone
+from typing import Dict, List, Optional, Tuple
 
 from ..config import settings
 
@@ -86,16 +94,64 @@ def week_end_date(iso_year: int, iso_week: int) -> datetime:
     return local.astimezone(timezone.utc)
 
 
-def quarter_start_dt() -> datetime:
-    """Configured Q2 start, midnight business tz, as UTC."""
-    y, m, d = (int(x) for x in settings.QUARTER_START.split("-"))
+# --- analysis window --------------------------------------------------------
+_window: Dict[str, Optional[str]] = {"start": None, "end": None, "continuous": None}
+
+
+def _parse_date(value, field: str) -> Tuple[int, int, int]:
+    try:
+        y, m, d = (int(x) for x in str(value).strip().split("-"))
+        date(y, m, d)  # range-validate
+        return y, m, d
+    except (TypeError, ValueError, AttributeError):
+        raise ValueError(f"{field} must be a YYYY-MM-DD date, got {value!r}")
+
+
+def configure_window(start: Optional[str], end: Optional[str],
+                     continuous: Optional[bool]) -> None:
+    """Set the in-process analysis window (values come from the settings DB).
+
+    ``start``/``end`` are YYYY-MM-DD strings or None; ``continuous`` means the
+    window has no end date. Pass all-None to reset to the env-default quarter.
+    Raises ValueError on malformed dates or end < start (nothing is changed).
+    """
+    if start is not None:
+        _parse_date(start, "window_start")
+    if end is not None and str(end).strip() != "":
+        _parse_date(end, "window_end")
+        if start is not None and not continuous:
+            if date(*_parse_date(end, "window_end")) < date(*_parse_date(start, "window_start")):
+                raise ValueError("window_end must be on or after window_start")
+    else:
+        end = None
+    _window["start"] = start
+    _window["end"] = end
+    _window["continuous"] = continuous
+
+
+def window_is_continuous() -> bool:
+    """True when the window has no end date (runs through 'now')."""
+    return bool(_window["continuous"])
+
+
+def window_start_dt() -> datetime:
+    """Window start, midnight business tz, as UTC."""
+    y, m, d = _parse_date(_window["start"] or settings.QUARTER_START, "window_start")
     local = datetime(y, m, d, tzinfo=_BIZ_TZ)
     return local.astimezone(timezone.utc)
 
 
-def quarter_end_dt() -> datetime:
-    """End of the quarter (3 months after start, minus 1 second), as UTC."""
-    y, m, d = (int(x) for x in settings.QUARTER_START.split("-"))
+def window_end_dt() -> datetime:
+    """Window end as UTC: 'now' when continuous, else the configured end date
+    (inclusive — 23:59:59 business tz). Unconfigured legacy fallback: 3 months
+    after the start, minus 1 second (a calendar quarter)."""
+    if window_is_continuous():
+        return now_utc()
+    if _window["end"]:
+        y, m, d = _parse_date(_window["end"], "window_end")
+        local = datetime(y, m, d, 23, 59, 59, tzinfo=_BIZ_TZ)
+        return local.astimezone(timezone.utc)
+    y, m, _d = _parse_date(_window["start"] or settings.QUARTER_START, "window_start")
     em, ey = m + 3, y
     if em > 12:
         em -= 12

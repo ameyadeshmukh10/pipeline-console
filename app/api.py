@@ -83,7 +83,9 @@ async def get_meta() -> Dict[str, Any]:
         last = await (await conn.execute(
             "SELECT MAX(finished_at) AS t FROM sync_runs WHERE status='success'")).fetchone()
         total_deals = await (await conn.execute("SELECT COUNT(*) AS n FROM deals")).fetchone()
-        win_window = await db.get_setting(conn, "quarter_start", settings.QUARTER_START)
+        from .metrics.windows import (biz_tz, window_end_dt,
+                                      window_is_continuous, window_start_dt)
+        continuous = window_is_continuous()
         return {
             "stages": STAGES,
             "roster": roles,
@@ -91,7 +93,11 @@ async def get_meta() -> Dict[str, Any]:
             "open_counts": {c["dealstage"]: c["n"] for c in counts},
             "total_deals": total_deals["n"] if total_deals else 0,
             "last_success_at": last["t"] if last else None,
-            "quarter_start": win_window,
+            "window": {
+                "start": window_start_dt().astimezone(biz_tz()).date().isoformat(),
+                "end": None if continuous else window_end_dt().astimezone(biz_tz()).date().isoformat(),
+                "continuous": continuous,
+            },
             "pipeline_id": settings.PIPELINE_ID,
             "hubspot_ready": settings.hubspot_ready,
             "anthropic_ready": settings.anthropic_ready,
@@ -123,13 +129,42 @@ async def get_settings() -> Dict[str, Any]:
         await conn.close()
 
 
+_WINDOW_KEYS = ("window_start", "window_end", "window_continuous")
+
+
+def _validate_window(w: Dict[str, Any]) -> None:
+    """400 on an unusable analysis window (merged current + incoming values)."""
+    from datetime import date
+
+    def parse(key: str, required: bool):
+        v = w.get(key)
+        if v in (None, ""):
+            if required:
+                raise HTTPException(400, f"{key} is required")
+            return None
+        try:
+            return date.fromisoformat(str(v).strip())
+        except ValueError:
+            raise HTTPException(400, f"{key} must be a YYYY-MM-DD date")
+
+    start = parse("window_start", required=True)
+    continuous = bool(w.get("window_continuous"))
+    end = parse("window_end", required=not continuous)
+    if not continuous and end is not None and end < start:
+        raise HTTPException(400, "window_end must be on or after window_start")
+
+
 @router.put("/settings")
 async def update_settings(body: SettingsUpdate) -> Dict[str, Any]:
     conn = await db.get_conn()
     try:
+        if any(k in body.values for k in _WINDOW_KEYS):
+            current = await db.get_all_settings(conn)
+            _validate_window({k: body.values.get(k, current.get(k)) for k in _WINDOW_KEYS})
         for key, value in body.values.items():
             await db.set_setting(conn, key, value)
         await conn.commit()
+        await db.refresh_window(conn)  # reports pick the new window up immediately
         values = await db.get_all_settings(conn)
         return {"ok": True, "values": values}
     finally:
